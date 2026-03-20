@@ -1,0 +1,6 @@
+.git
+.github
+dist
+coverage.out
+vsc-taskrunner
+cmd/vsc-taskrunner/vsc-taskrunner
