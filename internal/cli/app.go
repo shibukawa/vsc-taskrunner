@@ -60,7 +60,7 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  runtask add npm [--workspace path] [--path dir] [--task name[,name]] [--all]")
 	fmt.Fprintln(a.stderr, "  runtask add typescript [--workspace path] [--tsconfig path] [--task build,watch] [--all]")
 	fmt.Fprintln(a.stderr, "  runtask add <gulp|grunt|jake> [--task name[,name]] [--file path] [--all]")
-	fmt.Fprintln(a.stderr, "  runtask add <go|rust|swift|gradle|maven> [--workspace path] [--path dir] [--task build,test] [--all]")
+	fmt.Fprintln(a.stderr, "  runtask add <go|rust|swift|gradle|maven> [--workspace path] [--path dir] [--task build,test[,bench,cover,lint]] [--all]")
 	fmt.Fprintln(a.stderr, "    target aliases: gradle -> java-gradle, maven -> java-maven")
 	fmt.Fprintln(a.stderr, "  runtask <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run]")
 	fmt.Fprintln(a.stderr, "  runtask run <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run]")

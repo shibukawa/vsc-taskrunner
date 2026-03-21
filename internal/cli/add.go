@@ -596,7 +596,20 @@ func generatedAction(task tasks.Task) string {
 		}
 		return "build"
 	}
-	return ""
+	return generatedActionLabel(task.EffectiveLabel())
+}
+
+func generatedActionLabel(label string) string {
+	parts := strings.Split(label, "-")
+	if len(parts) < 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "npm", "tsc", "gulp", "grunt", "jake", "go", "cargo", "swift", "gradle", "maven":
+		return parts[1]
+	default:
+		return ""
+	}
 }
 
 func containsString(items []string, target string) bool {

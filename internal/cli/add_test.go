@@ -151,7 +151,7 @@ func TestAppRunAddTypeScriptAll(t *testing.T) {
 	}
 }
 
-func TestAppRunAddGoCreatesBuildAndTest(t *testing.T) {
+func TestAppRunAddGoCreatesCommonTasks(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -172,15 +172,33 @@ func TestAppRunAddGoCreatesBuildAndTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(file.Tasks) != 2 {
-		t.Fatalf("expected 2 tasks, got %d", len(file.Tasks))
+	if len(file.Tasks) != 5 {
+		t.Fatalf("expected 5 tasks, got %d", len(file.Tasks))
 	}
 	byLabel := make(map[string]tasks.Task, len(file.Tasks))
 	for _, task := range file.Tasks {
 		byLabel[task.Label] = task
 	}
-	if got, want := file.Tasks[0].ProblemMatcher, `"$go"`; string(got) != want {
+	if got, want := string(byLabel["go-build"].ProblemMatcher), `"$go"`; got != want {
 		t.Fatalf("problemMatcher = %s, want %s", string(got), want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["go-build"].Args), ","), "build,-trimpath,-ldflags=-s -w,./..."; got != want {
+		t.Fatalf("go-build args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["go-test"].Args), ","), "test,-v,./..."; got != want {
+		t.Fatalf("go-test args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["go-bench"].Args), ","), "test,-run=^$,-bench=.,-benchmem,./..."; got != want {
+		t.Fatalf("go-bench args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["go-cover"].Args), ","), "test,-coverprofile=coverage.out,./..."; got != want {
+		t.Fatalf("go-cover args = %q, want %q", got, want)
+	}
+	if got, want := byLabel["go-lint"].Type, "shell"; got != want {
+		t.Fatalf("go-lint type = %q, want %q", got, want)
+	}
+	if got, want := byLabel["go-lint"].Command.Value, "gofmt -l -w . && go vet ./..."; got != want {
+		t.Fatalf("go-lint command = %q, want %q", got, want)
 	}
 	buildGroup, ok := tasks.ParseTaskGroup(byLabel["go-build"].Group)
 	if !ok || buildGroup.Kind != "build" || !buildGroup.IsDefault {
@@ -190,7 +208,16 @@ func TestAppRunAddGoCreatesBuildAndTest(t *testing.T) {
 	if !ok || testGroup.Kind != "test" || !testGroup.IsDefault {
 		t.Fatalf("test group = %+v, want default test group", testGroup)
 	}
-	if !strings.Contains(stdout.String(), "added 2 tasks") {
+	if group, ok := tasks.ParseTaskGroup(byLabel["go-bench"].Group); ok {
+		t.Fatalf("bench group = %+v, want no group", group)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["go-cover"].Group); ok {
+		t.Fatalf("cover group = %+v, want no group", group)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["go-lint"].Group); ok {
+		t.Fatalf("lint group = %+v, want no group", group)
+	}
+	if !strings.Contains(stdout.String(), "added 5 tasks") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
 }
@@ -234,6 +261,9 @@ func TestAppRunAddGoKeepsExistingDefaultBuildTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(file.Tasks) != 6 {
+		t.Fatalf("expected 6 tasks, got %d", len(file.Tasks))
+	}
 	byLabel := make(map[string]tasks.Task, len(file.Tasks))
 	for _, task := range file.Tasks {
 		byLabel[task.Label] = task
@@ -252,6 +282,146 @@ func TestAppRunAddGoKeepsExistingDefaultBuildTask(t *testing.T) {
 	if strings.Contains(stderr.String(), "A default test task already exists") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
+}
+
+func TestAppRunAddGoBenchOnly(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/demo\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "go", "--task", "bench"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(file.Tasks))
+	}
+	if got, want := file.Tasks[0].Label, "go-bench"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "added task \"go-bench\"") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestAppRunAddGoLintOnly(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/demo\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "go", "--task", "lint"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(file.Tasks))
+	}
+	if got, want := file.Tasks[0].Label, "go-lint"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+	if got, want := file.Tasks[0].Type, "shell"; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+}
+
+func TestAppRunAddGoCoverOnly(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/demo\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "go", "--task", "cover"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(file.Tasks))
+	}
+	if got, want := file.Tasks[0].Label, "go-cover"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+}
+
+func TestAppRunAddDetectSaveIncludesGoBench(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/demo\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "detect", "--save", "--ecosystem", "go", "--all"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 5 {
+		t.Fatalf("expected 5 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if _, ok := byLabel["go-bench"]; !ok {
+		t.Fatalf("saved tasks = %#v, want go-bench", byLabel)
+	}
+	if _, ok := byLabel["go-cover"]; !ok {
+		t.Fatalf("saved tasks = %#v, want go-cover", byLabel)
+	}
+	if _, ok := byLabel["go-lint"]; !ok {
+		t.Fatalf("saved tasks = %#v, want go-lint", byLabel)
+	}
+}
+
+func tokensToStrings(values []tasks.TokenValue) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, value.Value)
+	}
+	return result
 }
 
 func TestAppRunAddDetectSaveFiltersByEcosystem(t *testing.T) {

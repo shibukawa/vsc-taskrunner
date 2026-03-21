@@ -116,11 +116,12 @@ runtask add maven --path server
 ```
 
 - Generates `process` tasks rather than provider tasks
-- Adds both `build` and `test` by default
+- Adds `build`, `test`, `bench`, `cover`, and `lint` by default for Go, and `build` plus `test` for the other ecosystems in this group
 - Marks `build` or `watch` with the `build` group, and `test` with the `test` group
 - Sets `options.cwd` to the detected project root
 - Applies built-in problem matchers by default for rust, swift, gradle, and maven
 - Uses matcher arrays for rust, gradle, and maven so panic output and common Kotlin compiler output are also covered
+- Go build tasks default to `go build -trimpath -ldflags=-s -w ./...`, test tasks default to `go test -v ./...`, bench tasks default to `go test -run=^$ -bench=. -benchmem ./...`, cover tasks default to `go test -coverprofile=coverage.out ./...`, and lint tasks run `gofmt -l -w . && go vet ./...`
 
 ## Task naming and shortcuts
 
@@ -130,6 +131,9 @@ Generated task labels now use canonical hyphenated names.
 - `npm-build-web`
 - `go-build`
 - `go-test`
+- `go-bench`
+- `go-cover`
+- `go-lint`
 - `tsc-build-tsconfig.json`
 - `gulp-build`
 
@@ -161,7 +165,7 @@ This check is not limited to one ecosystem. A default npm build task will block 
 | gulp | Yes | Yes | provider-like | Yes | None | Task names are extracted from files |
 | grunt | Yes | Yes | provider-like | Yes | None | Task names are extracted from files |
 | jake | Yes | Yes | provider-like | Yes | None | Task names are extracted from files |
-| go | Yes | Yes | process | Yes | `$go` | `go build ./...`, `go test ./...` |
+| go | Yes | Yes | process/shell | Yes | `$go` | `go build -trimpath -ldflags=-s -w ./...`, `go test -v ./...`, `go test -run=^$ -bench=. -benchmem ./...`, `go test -coverprofile=coverage.out ./...`, `gofmt -l -w . && go vet ./...` |
 | rust | Yes | Yes | process | Yes | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test` |
 | swift | Yes | Yes | process | Yes | `$swift` | `swift build`, `swift test` |
 | gradle | Yes | Yes | process | Yes | `$gradle`, `$gradle-kotlin` | Prefers `gradlew` |
@@ -192,11 +196,14 @@ runtask add typescript --all
 runtask tsc-watch-tsconfig.json
 ```
 
-Generate Go build and test tasks:
+Generate Go build, test, bench, cover, and lint tasks:
 
 ```sh
 runtask add go
 runtask go-test
+runtask go-bench
+runtask go-cover
+runtask go-lint
 ```
 
 Save detected gulp tasks directly:

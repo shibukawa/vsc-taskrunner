@@ -24,6 +24,20 @@ func newProcessTask(toolLabel string, command string, action string, root string
 	return task
 }
 
+func newShellTask(toolLabel string, command string, action string, root string, matcher json.RawMessage) Task {
+	task := Task{
+		Label:   formatToolLabel(toolLabel, action, root),
+		Type:    "shell",
+		Command: TokenValue{Value: command, Set: true},
+		Options: &Options{CWD: workspaceCWD(root)},
+		Group:   taskGroup(action),
+	}
+	if len(matcher) > 0 {
+		task.ProblemMatcher = cloneBytes(matcher)
+	}
+	return task
+}
+
 func taskGroup(action string) json.RawMessage {
 	switch action {
 	case "build", "watch":

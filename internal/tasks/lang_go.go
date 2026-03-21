@@ -4,8 +4,11 @@ import "encoding/json"
 
 func NewGoTasks(root string) []Task {
 	return []Task{
-		newProcessTask("go", "go", "build", root, []string{"build", "./..."}, json.RawMessage(`"$go"`), nil),
-		newProcessTask("go", "go", "test", root, []string{"test", "./..."}, json.RawMessage(`"$go"`), nil),
+		newProcessTask("go", "go", "build", root, []string{"build", "-trimpath", "-ldflags=-s -w", "./..."}, json.RawMessage(`"$go"`), nil),
+		newProcessTask("go", "go", "test", root, []string{"test", "-v", "./..."}, json.RawMessage(`"$go"`), nil),
+		newProcessTask("go", "go", "bench", root, []string{"test", "-run=^$", "-bench=.", "-benchmem", "./..."}, json.RawMessage(`"$go"`), nil),
+		newProcessTask("go", "go", "cover", root, []string{"test", "-coverprofile=coverage.out", "./..."}, json.RawMessage(`"$go"`), nil),
+		newShellTask("go", "gofmt -l -w . && go vet ./...", "lint", root, json.RawMessage(`"$go"`)),
 	}
 }
 
@@ -35,7 +38,7 @@ func collectGoCandidates(workspaceRoot string) ([]TaskCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]TaskCandidate, 0, len(roots)*2)
+	candidates := make([]TaskCandidate, 0, len(roots)*5)
 	for _, root := range roots {
 		candidates = appendRootTaskCandidates(candidates, "go", NewGoTasks(root), candidateDetail(root, "go.mod"))
 	}
