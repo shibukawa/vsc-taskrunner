@@ -15,6 +15,8 @@ func NewMavenTasks(workspaceRoot string, root string) []Task {
 	return []Task{
 		newProcessTask("maven", command, "build", root, []string{"package"}, json.RawMessage(`["$maven","$maven-kotlin"]`), windows),
 		newProcessTask("maven", command, "test", root, []string{"test"}, json.RawMessage(`["$maven","$maven-kotlin"]`), windows),
+		newProcessTask("maven", command, "clean", root, []string{"clean"}, json.RawMessage(`["$maven","$maven-kotlin"]`), windows),
+		newProcessTask("maven", command, "lint", root, []string{"verify"}, json.RawMessage(`["$maven","$maven-kotlin"]`), windows),
 	}
 }
 
@@ -69,7 +71,7 @@ func collectMavenCandidates(workspaceRoot string) ([]TaskCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]TaskCandidate, 0, len(roots)*2)
+	candidates := make([]TaskCandidate, 0, len(roots)*4)
 	for _, root := range roots {
 		candidates = appendRootTaskCandidates(candidates, "maven", NewMavenTasks(workspaceRoot, root), candidateDetail(root, mavenDetailFile(workspaceRoot, root)))
 	}

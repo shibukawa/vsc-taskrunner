@@ -15,6 +15,8 @@ func NewGradleTasks(workspaceRoot string, root string) []Task {
 	return []Task{
 		newProcessTask("gradle", command, "build", root, []string{"build"}, json.RawMessage(`["$gradle","$gradle-kotlin"]`), windows),
 		newProcessTask("gradle", command, "test", root, []string{"test"}, json.RawMessage(`["$gradle","$gradle-kotlin"]`), windows),
+		newProcessTask("gradle", command, "clean", root, []string{"clean"}, json.RawMessage(`["$gradle","$gradle-kotlin"]`), windows),
+		newProcessTask("gradle", command, "lint", root, []string{"check"}, json.RawMessage(`["$gradle","$gradle-kotlin"]`), windows),
 	}
 }
 
@@ -69,7 +71,7 @@ func collectGradleCandidates(workspaceRoot string) ([]TaskCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]TaskCandidate, 0, len(roots)*2)
+	candidates := make([]TaskCandidate, 0, len(roots)*4)
 	for _, root := range roots {
 		candidates = appendRootTaskCandidates(candidates, "gradle", NewGradleTasks(workspaceRoot, root), candidateDetail(root, gradleDetailFile(workspaceRoot, root)))
 	}
