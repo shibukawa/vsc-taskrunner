@@ -10,6 +10,7 @@ import (
 func (a *App) runAddTarget(
 	targetName string,
 	commandName string,
+	availableActions []string,
 	args []string,
 	findRoots func(string) ([]string, error),
 	buildTasks func(string, string) []tasks.Task,
@@ -62,9 +63,9 @@ func (a *App) runAddTarget(
 
 	selectedActions := parseCSVList(taskNames)
 	if len(selectedActions) == 0 && !addAll {
-		selectedActions = []string{"build", "test"}
+		selectedActions = append([]string(nil), availableActions...)
 	}
-	actions, err := chooseNamedItems(selectedActions, []string{"build", "test"}, addAll, targetName+" task names")
+	actions, err := chooseNamedItems(selectedActions, availableActions, addAll, targetName+" task names")
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1

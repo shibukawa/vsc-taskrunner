@@ -114,11 +114,12 @@ runtask add maven --path server
 ```
 
 - これらは provider type ではなく `process` task を生成します
-- 引数なしでは `build` と `test` を両方追加します
+- 引数なしでは、Go は `build` / `test` / `bench` / `cover` / `lint` を、その他のこれらの ecosystem は `build` と `test` を追加します
 - `build` / `watch` には `group: build`、`test` には `group: test` を付けます
 - `options.cwd` は検出された project root に設定します
 - rust, swift, gradle, maven には基本的な built-in matcher を既定付与します
 - rust / gradle / maven は複数 matcher を配列で既定設定し、panic 系や Kotlin compiler 系の代表的な出力も拾います
+- Go の既定引数は build が `go build -trimpath -ldflags=-s -w ./...`、test が `go test -v ./...`、bench が `go test -run=^$ -bench=. -benchmem ./...`、cover が `go test -coverprofile=coverage.out ./...`、lint が `gofmt -l -w . && go vet ./...` です
 
 ## サポート状況
 
@@ -130,7 +131,7 @@ runtask add maven --path server
 | gulp | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
 | grunt | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
 | jake | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
-| go | 対応 | 対応 | process | 対応 | `$go` | `go build ./...`, `go test ./...` |
+| go | 対応 | 対応 | process/shell | 対応 | `$go` | `go build -trimpath -ldflags=-s -w ./...`, `go test -v ./...`, `go test -run=^$ -bench=. -benchmem ./...`, `go test -coverprofile=coverage.out ./...`, `gofmt -l -w . && go vet ./...` |
 | rust | 対応 | 対応 | process | 対応 | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test` |
 | swift | 対応 | 対応 | process | 対応 | `$swift` | `swift build`, `swift test` |
 | gradle | 対応 | 対応 | process | 対応 | `$gradle`, `$gradle-kotlin` | `gradlew` 優先 |
@@ -162,11 +163,14 @@ runtask add typescript --all
 runtask tsc-watch-tsconfig.json
 ```
 
-Go project で build/test task を生成:
+Go project で build/test/bench/cover/lint task を生成:
 
 ```sh
 runtask add go
 runtask go-test
+runtask go-bench
+runtask go-cover
+runtask go-lint
 ```
 
 detect した gulp task をそのまま保存:

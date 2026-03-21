@@ -29,7 +29,7 @@ func addSubcommandHandlers() map[string]addSubcommandHandler {
 		commandName := name
 		def := definition
 		handlers[commandName] = func(app *App, args []string) int {
-			return app.runAddTarget(def.TargetName, commandName, args, def.FindRoots, def.BuildTasks)
+			return app.runAddTarget(def.TargetName, commandName, def.Actions, args, def.FindRoots, def.BuildTasks)
 		}
 	}
 	return handlers

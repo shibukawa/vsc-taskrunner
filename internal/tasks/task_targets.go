@@ -3,6 +3,7 @@ package tasks
 type AddTargetDefinition struct {
 	CommandName string
 	TargetName  string
+	Actions     []string
 	FindRoots   func(string) ([]string, error)
 	BuildTasks  func(string, string) []Task
 }
@@ -90,11 +91,21 @@ func AddTargetDefinitions() map[string]AddTargetDefinition {
 		definitions[target.commandName] = AddTargetDefinition{
 			CommandName: target.commandName,
 			TargetName:  target.name,
+			Actions:     targetActions(target.commandName),
 			FindRoots:   target.findRoots,
 			BuildTasks:  target.buildTasks,
 		}
 	}
 	return definitions
+}
+
+func targetActions(commandName string) []string {
+	switch commandName {
+	case "go":
+		return []string{"build", "test", "bench", "cover", "lint"}
+	default:
+		return []string{"build", "test"}
+	}
 }
 
 func newTaskCandidate(ecosystem string, label string, task Task, detail string) TaskCandidate {
