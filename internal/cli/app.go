@@ -62,8 +62,8 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  runtask add <gulp|grunt|jake> [--task name[,name]] [--file path] [--all]")
 	fmt.Fprintln(a.stderr, "  runtask add <go|rust|swift|gradle|maven> [--workspace path] [--path dir] [--task build,test[,bench,cover,lint]] [--all]")
 	fmt.Fprintln(a.stderr, "    target aliases: gradle -> java-gradle, maven -> java-maven")
-	fmt.Fprintln(a.stderr, "  runtask <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run]")
-	fmt.Fprintln(a.stderr, "  runtask run <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run]")
+	fmt.Fprintln(a.stderr, "  runtask <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run] [--quiet] [--no-color|--force-color]")
+	fmt.Fprintln(a.stderr, "  runtask run <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run] [--quiet] [--no-color|--force-color]")
 }
 
 func (a *App) runList(args []string) int {
@@ -159,12 +159,18 @@ func (a *App) runTask(args []string) int {
 	var workspaceRoot string
 	var jsonOutput bool
 	var dryRun bool
+	var quiet bool
+	var noColor bool
+	var forceColor bool
 	var inputAssignments multiFlag
 
 	fs.StringVar(&tasksPath, "tasks", "", "path to tasks.json")
 	fs.StringVar(&workspaceRoot, "workspace", "", "workspace root")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON")
 	fs.BoolVar(&dryRun, "dry-run", false, "resolve but do not execute")
+	fs.BoolVar(&quiet, "quiet", false, "suppress runtask status output")
+	fs.BoolVar(&noColor, "no-color", false, "disable colored output")
+	fs.BoolVar(&forceColor, "force-color", false, "force colored output")
 	fs.Var(&inputAssignments, "input", "input value in key=value form; repeatable")
 
 	flagArgs, taskName, err := splitRunArgs(args)
@@ -179,6 +185,10 @@ func (a *App) runTask(args []string) int {
 
 	if taskName == "" || fs.NArg() != 0 {
 		fmt.Fprintln(a.stderr, "run requires exactly one task label")
+		return 2
+	}
+	if noColor && forceColor {
+		fmt.Fprintln(a.stderr, "cannot use --no-color and --force-color together")
 		return 2
 	}
 
@@ -242,12 +252,34 @@ func (a *App) runTask(args []string) int {
 
 	stdout := a.stdout
 	stderr := a.stderr
+	outputFile := writerFile(a.stdout)
+	metaFile := writerFile(a.stderr)
 	if jsonOutput {
 		stdout = a.stderr
 		stderr = a.stderr
+		outputFile = writerFile(a.stderr)
+		metaFile = writerFile(a.stderr)
 	}
 
-	runner := tasks.NewRunner(catalog, stdout, stderr)
+	runnerOptions := tasks.RunnerOptions{
+		OutputMode: tasks.OutputModeDefault,
+		ColorMode:  tasks.ColorModeAuto,
+		Input:      a.stdin,
+		InputFile:  readerFile(a.stdin),
+		OutputFile: outputFile,
+		MetaFile:   metaFile,
+	}
+	if quiet || jsonOutput {
+		runnerOptions.OutputMode = tasks.OutputModeQuiet
+	}
+	if noColor {
+		runnerOptions.ColorMode = tasks.ColorModeNever
+	}
+	if forceColor {
+		runnerOptions.ColorMode = tasks.ColorModeAlways
+	}
+
+	runner := tasks.NewRunnerWithOptions(catalog, stdout, stderr, runnerOptions)
 	result, err := runner.Run(resolvedLabel)
 	if err != nil && !errors.Is(err, tasks.ErrTaskFailed) {
 		fmt.Fprintln(a.stderr, err)
@@ -260,7 +292,7 @@ func (a *App) runTask(args []string) int {
 
 	printProblems(a.stderr, result.Problems)
 
-	if err != nil {
+	if err != nil && runnerOptions.OutputMode == tasks.OutputModeQuiet {
 		fmt.Fprintf(a.stderr, "task failed: %s\n", resolvedLabel)
 	}
 
@@ -418,4 +450,14 @@ func taskGroupName(raw json.RawMessage) string {
 		return group.Kind
 	}
 	return ""
+}
+
+func writerFile(writer io.Writer) *os.File {
+	file, _ := writer.(*os.File)
+	return file
+}
+
+func readerFile(reader io.Reader) *os.File {
+	file, _ := reader.(*os.File)
+	return file
 }

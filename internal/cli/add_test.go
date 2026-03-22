@@ -222,6 +222,69 @@ func TestAppRunAddGoCreatesCommonTasks(t *testing.T) {
 	}
 }
 
+func TestAppRunAddGoCreatesCommandBuildTasks(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/demo\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, commandName := range []string{"runtask", "worker"} {
+		commandDir := filepath.Join(workspace, "cmd", commandName)
+		if err := os.MkdirAll(commandDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(commandDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "go"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 7 {
+		t.Fatalf("expected 7 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if got, want := byLabel["go-build"].Dependencies.Labels(), []string{"go-build-runtask", "go-build-worker"}; !equalStringSlices(got, want) {
+		t.Fatalf("go-build dependsOn = %v, want %v", got, want)
+	}
+	if got, want := byLabel["go-build"].DependsOrder, "parallel"; got != want {
+		t.Fatalf("go-build dependsOrder = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["go-build-runtask"].Args), ","), "build,-trimpath,-ldflags=-s -w,-o,./bin/runtask,./cmd/runtask"; got != want {
+		t.Fatalf("go-build-runtask args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["go-build-worker"].Args), ","), "build,-trimpath,-ldflags=-s -w,-o,./bin/worker,./cmd/worker"; got != want {
+		t.Fatalf("go-build-worker args = %q, want %q", got, want)
+	}
+	if got, want := byLabel["go-build-runtask"].Options.CWD, "${workspaceFolder}"; got != want {
+		t.Fatalf("go-build-runtask cwd = %q, want %q", got, want)
+	}
+	if got, want := byLabel["go-build-worker"].Options.CWD, "${workspaceFolder}"; got != want {
+		t.Fatalf("go-build-worker cwd = %q, want %q", got, want)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["go-build-runtask"].Group); ok {
+		t.Fatalf("go-build-runtask group = %+v, want no group", group)
+	}
+	if !strings.Contains(stdout.String(), "added 7 tasks") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
 func TestAppRunAddGoKeepsExistingDefaultBuildTask(t *testing.T) {
 	t.Parallel()
 
@@ -416,12 +479,67 @@ func TestAppRunAddDetectSaveIncludesGoBench(t *testing.T) {
 	}
 }
 
+func TestAppRunAddDetectSaveIncludesGoCommandBuilds(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/demo\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commandDir := filepath.Join(workspace, "cmd", "runtask")
+	if err := os.MkdirAll(commandDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commandDir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "detect", "--save", "--ecosystem", "go", "--all"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 6 {
+		t.Fatalf("expected 6 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if _, ok := byLabel["go-build-runtask"]; !ok {
+		t.Fatalf("saved tasks = %#v, want go-build-runtask", byLabel)
+	}
+	if got, want := byLabel["go-build"].Dependencies.Labels(), []string{"go-build-runtask"}; !equalStringSlices(got, want) {
+		t.Fatalf("go-build dependsOn = %v, want %v", got, want)
+	}
+}
+
 func tokensToStrings(values []tasks.TokenValue) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		result = append(result, value.Value)
 	}
 	return result
+}
+
+func equalStringSlices(got []string, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAppRunAddDetectSaveFiltersByEcosystem(t *testing.T) {

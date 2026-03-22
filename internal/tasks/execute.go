@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 var ErrTaskFailed = errors.New("task failed")
@@ -22,18 +23,22 @@ type RunResult struct {
 }
 
 type TaskRun struct {
-	Label    string    `json:"label"`
-	ExitCode int       `json:"exitCode"`
-	Command  string    `json:"command"`
-	Args     []string  `json:"args,omitempty"`
-	CWD      string    `json:"cwd"`
-	Problems []Problem `json:"problems,omitempty"`
+	Label      string    `json:"label"`
+	ExitCode   int       `json:"exitCode"`
+	Command    string    `json:"command"`
+	Args       []string  `json:"args,omitempty"`
+	CWD        string    `json:"cwd"`
+	WallTime   int64     `json:"wallTimeMs,omitempty"`
+	UserTime   int64     `json:"userTimeMs,omitempty"`
+	SystemTime int64     `json:"systemTimeMs,omitempty"`
+	Problems   []Problem `json:"problems,omitempty"`
 }
 
 type Runner struct {
 	catalog *Catalog
 	stdout  io.Writer
 	stderr  io.Writer
+	options RunnerOptions
 	mu      sync.Mutex
 	runs    []TaskRun
 	states  map[string]*taskState
@@ -46,10 +51,15 @@ type taskState struct {
 }
 
 func NewRunner(catalog *Catalog, stdout io.Writer, stderr io.Writer) *Runner {
+	return NewRunnerWithOptions(catalog, stdout, stderr, RunnerOptions{OutputMode: OutputModeQuiet, ColorMode: ColorModeAuto})
+}
+
+func NewRunnerWithOptions(catalog *Catalog, stdout io.Writer, stderr io.Writer, options RunnerOptions) *Runner {
 	return &Runner{
 		catalog: catalog,
 		stdout:  stdout,
 		stderr:  stderr,
+		options: normalizeRunnerOptions(options),
 		states:  make(map[string]*taskState, len(catalog.Tasks)),
 	}
 }
@@ -154,6 +164,7 @@ func (r *Runner) executeTask(ctx context.Context, task ResolvedTask) (int, error
 	if task.Command == "" {
 		return 0, nil
 	}
+	start := time.Now()
 
 	var cmd *exec.Cmd
 	switch task.Type {
@@ -167,15 +178,13 @@ func (r *Runner) executeTask(ctx context.Context, task ResolvedTask) (int, error
 	}
 
 	cmd.Dir = task.Options.CWD
-	cmd.Env = mergeProcessEnv(os.Environ(), task.Options.Env)
+	cmd.Env = mergeProcessEnv(os.Environ(), colorizedEnv(task.Options.Env, r.options.ColorMode))
 
 	collector, err := newProblemCollector(task.Label, task.ProblemMatcher, r.catalog.WorkspaceRoot)
 	if err != nil {
 		return 1, err
 	}
 	outputWriter := newMatchedWriter(r.stdout, collector)
-	cmd.Stdout = outputWriter
-	cmd.Stderr = outputWriter
 
 	r.record(TaskRun{
 		Label:    task.Label,
@@ -184,19 +193,20 @@ func (r *Runner) executeTask(ctx context.Context, task ResolvedTask) (int, error
 		CWD:      task.Options.CWD,
 		ExitCode: 0,
 	})
+	r.printTaskStart(task)
 
-	if err := cmd.Run(); err != nil {
-		outputWriter.Close()
-		problems := collector.Close()
-		r.attachProblems(task.Label, problems)
-		exitCode := exitCode(err)
-		r.updateExitCode(task.Label, exitCode)
-		return exitCode, fmt.Errorf("%w: %s", ErrTaskFailed, task.Label)
-	}
+	processState, runErr := r.runCommand(ctx, cmd, outputWriter)
 	outputWriter.Close()
 	problems := collector.Close()
-	r.attachProblems(task.Label, problems)
-	r.updateExitCode(task.Label, 0)
+	wallTime, userTime, systemTime := processTimes(start, processState)
+	if runErr != nil {
+		exitCode := exitCode(runErr)
+		r.finishTask(task.Label, exitCode, problems, wallTime, userTime, systemTime)
+		r.printTaskFinish(task.Label, exitCode, wallTime, userTime, systemTime)
+		return exitCode, fmt.Errorf("%w: %s", ErrTaskFailed, task.Label)
+	}
+	r.finishTask(task.Label, 0, problems, wallTime, userTime, systemTime)
+	r.printTaskFinish(task.Label, 0, wallTime, userTime, systemTime)
 	return 0, nil
 }
 
@@ -212,6 +222,23 @@ func (r *Runner) updateExitCode(label string, code int) {
 	for index := range r.runs {
 		if r.runs[index].Label == label {
 			r.runs[index].ExitCode = code
+		}
+	}
+}
+
+func (r *Runner) finishTask(label string, code int, problems []Problem, wallTime time.Duration, userTime time.Duration, systemTime time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for index := range r.runs {
+		if r.runs[index].Label != label {
+			continue
+		}
+		r.runs[index].ExitCode = code
+		r.runs[index].WallTime = durationMilliseconds(wallTime)
+		r.runs[index].UserTime = durationMilliseconds(userTime)
+		r.runs[index].SystemTime = durationMilliseconds(systemTime)
+		if len(problems) > 0 {
+			r.runs[index].Problems = append(r.runs[index].Problems, problems...)
 		}
 	}
 }

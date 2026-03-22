@@ -1,0 +1,100 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"args": [
+				"build",
+				"-trimpath",
+				"-ldflags=-s -w",
+				"./..."
+			],
+			"command":      "go",
+			"dependsOn":    "go-build-runtask",
+			"dependsOrder": "parallel",
+			"group": {
+				"kind":      "build",
+				"isDefault": true
+			},
+			"label": "go-build",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$go",
+			"type":           "process"
+		},
+		{
+			"args": [
+				"test",
+				"-v",
+				"./..."
+			],
+			"command": "go",
+			"group": {
+				"kind":      "test",
+				"isDefault": true
+			},
+			"label": "go-test",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$go",
+			"type":           "process"
+		},
+		{
+			"args": [
+				"test",
+				"-run=^$",
+				"-bench=.",
+				"-benchmem",
+				"./..."
+			],
+			"command": "go",
+			"label":   "go-bench",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$go",
+			"type":           "process"
+		},
+		{
+			"args": [
+				"test",
+				"-coverprofile=coverage.out",
+				"./..."
+			],
+			"command": "go",
+			"label":   "go-cover",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$go",
+			"type":           "process"
+		},
+		{
+			"command": "gofmt -l -w . && go vet ./...",
+			"label":   "go-lint",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$go",
+			"type":           "shell"
+		},
+		{
+			"args": [
+				"build",
+				"-trimpath",
+				"-ldflags=-s -w",
+				"-o",
+				"./bin/runtask",
+				"./cmd/runtask"
+			],
+			"command": "go",
+			"label":   "go-build-runtask",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$go",
+			"type":           "process"
+		}
+	]
+}

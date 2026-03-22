@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunnerRejectsCircularDependencies(t *testing.T) {
@@ -534,5 +535,189 @@ func TestRunnerCollectsBuiltinMavenKotlinMatcher(t *testing.T) {
 	}
 	if result.Problems[0].Line != 8 || result.Problems[0].Column != 15 {
 		t.Fatalf("unexpected location: %d:%d", result.Problems[0].Line, result.Problems[0].Column)
+	}
+}
+
+func TestRunnerDefaultOutputShowsStatusSummary(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+
+	catalog := &Catalog{
+		WorkspaceRoot: workspace,
+		Tasks: map[string]ResolvedTask{
+			"echo": {
+				Label:        "echo",
+				Type:         "shell",
+				Command:      "printf",
+				CommandToken: ResolvedToken{Value: "printf"},
+				Args:         []string{"hello\n"},
+				ArgTokens:    []ResolvedToken{{Value: "hello\n"}},
+				Options:      ResolvedOptions{CWD: workspace, Shell: ShellRuntime{Executable: "/bin/sh", Args: []string{"-c"}, Family: "posix"}},
+			},
+		},
+	}
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	runner := NewRunnerWithOptions(catalog, &stdout, &stderr, RunnerOptions{OutputMode: OutputModeDefault, ColorMode: ColorModeNever})
+	result, err := runner.Run("echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(result.Tasks))
+	}
+	if !strings.Contains(stdout.String(), "hello") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "🚀 run echo") {
+		t.Fatalf("missing start summary: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "✅ OK echo") {
+		t.Fatalf("missing finish summary: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "\x1b[") {
+		t.Fatalf("unexpected ANSI escape sequence: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "wall=") || !strings.Contains(stderr.String(), "user=") || !strings.Contains(stderr.String(), "sys=") {
+		t.Fatalf("missing timing summary: %q", stderr.String())
+	}
+	if result.Tasks[0].WallTime < 0 || result.Tasks[0].UserTime < 0 || result.Tasks[0].SystemTime < 0 {
+		t.Fatalf("unexpected task timing: %+v", result.Tasks[0])
+	}
+}
+
+func TestRunnerQuietSuppressesStatusSummary(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+
+	catalog := &Catalog{
+		WorkspaceRoot: workspace,
+		Tasks: map[string]ResolvedTask{
+			"echo": {
+				Label:        "echo",
+				Type:         "shell",
+				Command:      "printf",
+				CommandToken: ResolvedToken{Value: "printf"},
+				Args:         []string{"quiet\n"},
+				ArgTokens:    []ResolvedToken{{Value: "quiet\n"}},
+				Options:      ResolvedOptions{CWD: workspace, Shell: ShellRuntime{Executable: "/bin/sh", Args: []string{"-c"}, Family: "posix"}},
+			},
+		},
+	}
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	runner := NewRunnerWithOptions(catalog, &stdout, &stderr, RunnerOptions{OutputMode: OutputModeQuiet, ColorMode: ColorModeAlways})
+	if _, err := runner.Run("echo"); err != nil {
+		t.Fatal(err)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+	if !strings.Contains(stdout.String(), "quiet") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunnerColorModesInjectEnvironment(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+
+	newCatalog := func() *Catalog {
+		return &Catalog{
+			WorkspaceRoot: workspace,
+			Tasks: map[string]ResolvedTask{
+				"env": {
+					Label:        "env",
+					Type:         "process",
+					Command:      "/bin/sh",
+					CommandToken: ResolvedToken{Value: "/bin/sh"},
+					Args:         []string{"-c", `printf '%s|%s|%s|%s' "$NO_COLOR" "$FORCE_COLOR" "$CLICOLOR" "$CLICOLOR_FORCE"`},
+					ArgTokens:    []ResolvedToken{{Value: "-c"}, {Value: `printf '%s|%s|%s|%s' "$NO_COLOR" "$FORCE_COLOR" "$CLICOLOR" "$CLICOLOR_FORCE"`}},
+					Options:      ResolvedOptions{CWD: workspace, Shell: ShellRuntime{Executable: "/bin/sh", Args: []string{"-c"}, Family: "posix"}},
+				},
+			},
+		}
+	}
+
+	var noColorOut strings.Builder
+	runner := NewRunnerWithOptions(newCatalog(), &noColorOut, io.Discard, RunnerOptions{OutputMode: OutputModeQuiet, ColorMode: ColorModeNever})
+	if _, err := runner.Run("env"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(noColorOut.String()); got != "1|0|0|0" {
+		t.Fatalf("no-color env = %q", got)
+	}
+
+	var forceColorOut strings.Builder
+	runner = NewRunnerWithOptions(newCatalog(), &forceColorOut, io.Discard, RunnerOptions{OutputMode: OutputModeQuiet, ColorMode: ColorModeAlways})
+	if _, err := runner.Run("env"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(forceColorOut.String()); got != "|1|1|1" {
+		t.Fatalf("force-color env = %q", got)
+	}
+}
+
+func TestRunnerForceColorAddsANSIToStatusSummary(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+
+	catalog := &Catalog{
+		WorkspaceRoot: workspace,
+		Tasks: map[string]ResolvedTask{
+			"echo": {
+				Label:        "echo",
+				Type:         "shell",
+				Command:      "printf",
+				CommandToken: ResolvedToken{Value: "printf"},
+				Args:         []string{"color\n"},
+				ArgTokens:    []ResolvedToken{{Value: "color\n"}},
+				Options:      ResolvedOptions{CWD: workspace, Shell: ShellRuntime{Executable: "/bin/sh", Args: []string{"-c"}, Family: "posix"}},
+			},
+		},
+	}
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	runner := NewRunnerWithOptions(catalog, &stdout, &stderr, RunnerOptions{OutputMode: OutputModeDefault, ColorMode: ColorModeAlways})
+	if _, err := runner.Run("echo"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "\x1b[") {
+		t.Fatalf("expected ANSI escape sequence, got %q", stderr.String())
+	}
+}
+
+func TestRunnerRecordsWallTimeMilliseconds(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+
+	catalog := &Catalog{
+		WorkspaceRoot: workspace,
+		Tasks: map[string]ResolvedTask{
+			"sleep": {
+				Label:        "sleep",
+				Type:         "shell",
+				Command:      "sleep",
+				CommandToken: ResolvedToken{Value: "sleep"},
+				Args:         []string{"0.02"},
+				ArgTokens:    []ResolvedToken{{Value: "0.02"}},
+				Options:      ResolvedOptions{CWD: workspace, Shell: ShellRuntime{Executable: "/bin/sh", Args: []string{"-c"}, Family: "posix"}},
+			},
+		},
+	}
+
+	runner := NewRunnerWithOptions(catalog, io.Discard, io.Discard, RunnerOptions{OutputMode: OutputModeQuiet, ColorMode: ColorModeNever})
+	result, err := runner.Run("sleep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(result.Tasks))
+	}
+	if result.Tasks[0].WallTime < int64((20 * time.Millisecond).Milliseconds()) {
+		t.Fatalf("wallTimeMs = %d", result.Tasks[0].WallTime)
 	}
 }
