@@ -94,6 +94,9 @@ func (r *Runner) metaColorEnabled() bool {
 }
 
 func (r *Runner) shouldUsePTY() bool {
+	if r.options.OutputFile == nil {
+		return false
+	}
 	if r.options.ColorMode == ColorModeNever {
 		return false
 	}
