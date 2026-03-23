@@ -45,6 +45,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Download Go modules
+        run: go mod download
+
       - name: Prepare metadata
         id: meta
         shell: bash

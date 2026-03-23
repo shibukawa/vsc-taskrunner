@@ -33,8 +33,8 @@ func taskTargetDefinitions() []taskTargetDefinition {
 			name:        "go",
 			commandName: "go",
 			findRoots:   FindGoModules,
-			buildTasks: func(_ string, root string) []Task {
-				return NewGoTasks(root)
+			buildTasks: func(workspaceRoot string, root string) []Task {
+				return NewGoTasks(workspaceRoot, root)
 			},
 			collectCandidates: collectGoCandidates,
 			problemMatchers:   goProblemMatchers,
