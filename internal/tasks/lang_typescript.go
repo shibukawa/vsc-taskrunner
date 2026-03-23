@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -46,14 +47,34 @@ func typescriptProblemMatchers() map[string]matcherConfig {
 	}
 }
 
+func AvailableTypeScriptTaskModes(workspaceRoot string) ([]string, error) {
+	scripts, err := readWorkspaceRootPackageScripts(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	available := make([]string, 0, 2)
+	for _, mode := range []string{"build", "watch"} {
+		if _, exists := scripts[mode]; exists {
+			continue
+		}
+		available = append(available, mode)
+	}
+	sort.Strings(available)
+	return available, nil
+}
+
 func collectTypeScriptCandidates(workspaceRoot string) ([]TaskCandidate, error) {
 	tsconfigs, err := FindTypeScriptConfigs(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]TaskCandidate, 0, len(tsconfigs)*2)
+	availableModes, err := AvailableTypeScriptTaskModes(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]TaskCandidate, 0, len(tsconfigs)*len(availableModes))
 	for _, tsconfig := range tsconfigs {
-		for _, option := range []string{"build", "watch"} {
+		for _, option := range availableModes {
 			task := NewTypeScriptTask(tsconfig, option)
 			candidates = append(candidates, newTaskCandidate("typescript", inferTaskLabel(task, workspaceRoot), task, candidateDetail(pathFromFile(tsconfig), tsconfig)))
 		}

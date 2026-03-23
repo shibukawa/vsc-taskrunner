@@ -103,6 +103,12 @@ func targetActions(commandName string) []string {
 	switch commandName {
 	case "go":
 		return []string{"build", "test", "bench", "cover", "lint"}
+	case "rust":
+		return []string{"build", "test", "check", "bench"}
+	case "swift":
+		return []string{"build", "test", "clean", "run"}
+	case "gradle", "maven":
+		return []string{"build", "test", "clean", "lint"}
 	default:
 		return []string{"build", "test"}
 	}

@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,27 +41,64 @@ func FindNPMPackages(workspaceRoot string) ([]string, error) {
 }
 
 func NPMScripts(workspaceRoot string, packageDir string) ([]string, error) {
+	raw, err := readPackageScripts(workspaceRoot, packageDir)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]string, 0, len(raw.Scripts))
+	for name := range raw.Scripts {
+		if !includeNPMScript(name) {
+			continue
+		}
+		items = append(items, name)
+	}
+	sort.Strings(items)
+	return items, nil
+}
+
+func includeNPMScript(name string) bool {
+	return strings.HasPrefix(name, "pre") || strings.HasPrefix(name, "post") || !strings.Contains(name, ":")
+}
+
+func readWorkspaceRootPackageScripts(workspaceRoot string) (map[string]string, error) {
+	raw, err := readPackageScripts(workspaceRoot, "")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	return raw.Scripts, nil
+}
+
+func readPackageScripts(workspaceRoot string, packageDir string) (struct {
+	Scripts map[string]string `json:"scripts"`
+}, error) {
 	packagePath := filepath.Join(workspaceRoot, filepath.FromSlash(normalizeRelative(packageDir)), "package.json")
 	content, err := os.ReadFile(packagePath)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", packagePath, err)
+		return struct {
+			Scripts map[string]string `json:"scripts"`
+		}{}, fmt.Errorf("read %s: %w", packagePath, err)
 	}
 	standardized, err := hujson.Standardize(content)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", packagePath, err)
+		return struct {
+			Scripts map[string]string `json:"scripts"`
+		}{}, fmt.Errorf("parse %s: %w", packagePath, err)
 	}
 	var raw struct {
 		Scripts map[string]string `json:"scripts"`
 	}
 	if err := json.Unmarshal(standardized, &raw); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", packagePath, err)
+		return struct {
+			Scripts map[string]string `json:"scripts"`
+		}{}, fmt.Errorf("decode %s: %w", packagePath, err)
 	}
-	items := make([]string, 0, len(raw.Scripts))
-	for name := range raw.Scripts {
-		items = append(items, name)
+	if raw.Scripts == nil {
+		raw.Scripts = map[string]string{}
 	}
-	sort.Strings(items)
-	return items, nil
+	return raw, nil
 }
 
 func NewProviderTask(taskType string, providerTask string, providerFile string) Task {
