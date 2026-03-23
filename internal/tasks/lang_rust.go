@@ -6,6 +6,8 @@ func NewCargoTasks(root string) []Task {
 	return []Task{
 		newProcessTask("cargo", "cargo", "build", root, []string{"build"}, json.RawMessage(`["$cargo","$cargo-panic"]`), nil),
 		newProcessTask("cargo", "cargo", "test", root, []string{"test"}, json.RawMessage(`["$cargo","$cargo-panic"]`), nil),
+		newProcessTask("cargo", "cargo", "check", root, []string{"check"}, json.RawMessage(`["$cargo","$cargo-panic"]`), nil),
+		newProcessTask("cargo", "cargo", "bench", root, []string{"bench"}, json.RawMessage(`["$cargo","$cargo-panic"]`), nil),
 	}
 }
 
@@ -54,7 +56,7 @@ func collectRustCandidates(workspaceRoot string) ([]TaskCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]TaskCandidate, 0, len(roots)*2)
+	candidates := make([]TaskCandidate, 0, len(roots)*4)
 	for _, root := range roots {
 		candidates = appendRootTaskCandidates(candidates, "rust", NewCargoTasks(root), candidateDetail(root, "Cargo.toml"))
 	}

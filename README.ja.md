@@ -71,6 +71,7 @@ runtask add npm --path web --task build,test
 - `package.json` を検出します
 - 保存形式は `type: npm` と `script` です
 - 実行時は lockfile と `packageManager` を見て `npm` / `yarn` / `pnpm` を解決します
+- 候補に含める script 名は `pre` / `post` で始まるもの、または `:` を含まないものに限定します
 
 ### typescript
 
@@ -83,6 +84,7 @@ runtask add typescript --tsconfig packages/app/tsconfig.json --task build,watch
 - `tsconfig*.json` を検出します
 - 引数なしでは `build` を追加します
 - `--all` では各 tsconfig について `build` と `watch` を追加します
+- workspace root の `package.json` に `build` または `watch` script がある場合、同名の TypeScript task は追加しません
 - `build` には `group: build` を付けます
 - 実行時は `$tsc` / `$tsc-watch` を自動設定します
 
@@ -114,7 +116,7 @@ runtask add maven --path server
 ```
 
 - これらは provider type ではなく `process` task を生成します
-- 引数なしでは、Go は `build` / `test` / `bench` / `cover` / `lint` を、その他のこれらの ecosystem は `build` と `test` を追加します
+- 引数なしでは、Go は `build` / `test` / `bench` / `cover` / `lint` を、Rust は `build` / `test` / `check` / `bench` を、Swift は `build` / `test` / `clean` / `run` を、Gradle/Maven は `build` / `test` / `clean` / `lint` を追加します
 - `build` / `watch` には `group: build`、`test` には `group: test` を付けます
 - `options.cwd` は検出された project root に設定します
 - rust, swift, gradle, maven には基本的な built-in matcher を既定付与します
@@ -126,16 +128,16 @@ runtask add maven --path server
 | Ecosystem | Detect | Add | Saved form | Run | Default matcher | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | shell/process | なし | 対話式のみ | shell/process | 対応 | 明示時のみ | custom task |
-| npm | 対応 | 対応 | provider-like | 対応 | なし | script 単位、`--all` 対応 |
-| typescript | 対応 | 対応 | provider-like | 対応 | `$tsc`, `$tsc-watch` | `build/watch` 生成 |
+| npm | 対応 | 対応 | provider-like | 対応 | なし | script 単位、`--all` 対応。候補は `pre*` / `post*` または `:` を含まない名前 |
+| typescript | 対応 | 対応 | provider-like | 対応 | `$tsc`, `$tsc-watch` | workspace root の npm scripts に同名が無い場合のみ `build/watch` を生成 |
 | gulp | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
 | grunt | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
 | jake | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
 | go | 対応 | 対応 | process/shell | 対応 | `$go` | `go build -trimpath -ldflags=-s -w ./...`, `go test -v ./...`, `go test -run=^$ -bench=. -benchmem ./...`, `go test -coverprofile=coverage.out ./...`, `gofmt -l -w . && go vet ./...` |
-| rust | 対応 | 対応 | process | 対応 | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test` |
-| swift | 対応 | 対応 | process | 対応 | `$swift` | `swift build`, `swift test` |
-| gradle | 対応 | 対応 | process | 対応 | `$gradle`, `$gradle-kotlin` | `gradlew` 優先 |
-| maven | 対応 | 対応 | process | 対応 | `$maven`, `$maven-kotlin` | `mvnw` 優先 |
+| rust | 対応 | 対応 | process | 対応 | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test`, `cargo check`, `cargo bench` |
+| swift | 対応 | 対応 | process | 対応 | `$swift` | `swift build`, `swift test`, `swift package clean`, `swift run` |
+| gradle | 対応 | 対応 | process | 対応 | `$gradle`, `$gradle-kotlin` | `gradlew` 優先。`build`, `test`, `clean`, `lint` を公開 |
+| maven | 対応 | 対応 | process | 対応 | `$maven`, `$maven-kotlin` | `mvnw` 優先。`build`, `test`, `clean`, `lint` を公開 |
 
 ## 互換性の前提
 
@@ -156,12 +158,16 @@ runtask add npm --all
 runtask npm-test
 ```
 
+`lint:fix` のような script は候補から外し、`prebuild` や `postdeploy:prod` は候補に含めます。
+
 TypeScript project の build/watch を追加:
 
 ```sh
 runtask add typescript --all
 runtask tsc-watch-tsconfig.json
 ```
+
+workspace root の `package.json` に `build` または `watch` script がある場合は、対応する TypeScript task を追加せず、npm script を優先します。
 
 Go project で build/test/bench/cover/lint task を生成:
 
@@ -172,6 +178,38 @@ runtask go-bench
 runtask go-cover
 runtask go-lint
 ```
+
+Rust project で build/test/check/bench task を生成:
+
+```sh
+runtask add rust
+runtask cargo-check
+runtask cargo-bench
+```
+
+出力例:
+
+```text
+$ runtask add rust
+added 4 tasks to .vscode/tasks.json: cargo-bench, cargo-build, cargo-check, cargo-test
+```
+
+Swift Package project で build/test/clean/run task を生成:
+
+```sh
+runtask add swift
+runtask swift-clean
+runtask swift-run
+```
+
+出力例:
+
+```text
+$ runtask add swift
+added 4 tasks to .vscode/tasks.json: swift-build, swift-clean, swift-run, swift-test
+```
+
+`swift-run` は executable target を含む package が必要です。
 
 detect した gulp task をそのまま保存:
 

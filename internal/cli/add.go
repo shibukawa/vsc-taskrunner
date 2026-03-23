@@ -255,7 +255,12 @@ func (a *App) runAddTypeScript(args []string) int {
 	if len(selectedModes) == 0 && !addAll {
 		selectedModes = []string{"build"}
 	}
-	modes, err := chooseNamedItems(selectedModes, []string{"build", "watch"}, addAll, "typescript task modes")
+	availableModes, err := tasks.AvailableTypeScriptTaskModes(loaderOptions.WorkspaceRoot)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	modes, err := chooseTypeScriptModes(selectedModes, availableModes, addAll)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -569,6 +574,53 @@ func chooseNamedItems(selected []string, available []string, addAll bool, itemNa
 		result = append(result, item)
 	}
 	return result, nil
+}
+
+func chooseTypeScriptModes(selected []string, available []string, addAll bool) ([]string, error) {
+	allModes := []string{"build", "watch"}
+	validSet := make(map[string]bool, len(allModes))
+	for _, mode := range allModes {
+		validSet[mode] = true
+	}
+	for _, mode := range selected {
+		if !validSet[mode] {
+			return nil, fmt.Errorf("unknown item %q for typescript task modes (available: %s)", mode, strings.Join(allModes, ", "))
+		}
+	}
+	availableSet := make(map[string]bool, len(available))
+	for _, mode := range available {
+		availableSet[mode] = true
+	}
+	suppressed := make([]string, 0, len(allModes)-len(available))
+	for _, mode := range allModes {
+		if !availableSet[mode] {
+			suppressed = append(suppressed, mode)
+		}
+	}
+	if addAll {
+		if len(available) == 0 {
+			return nil, fmt.Errorf("no TypeScript task modes available; workspace-root npm scripts take priority for: %s", strings.Join(suppressed, ", "))
+		}
+		copied := append([]string(nil), available...)
+		sort.Strings(copied)
+		return copied, nil
+	}
+	if len(selected) == 0 {
+		return chooseNamedItems(selected, available, addAll, "typescript task modes")
+	}
+	result := make([]string, 0, len(selected))
+	for _, mode := range selected {
+		if availableSet[mode] {
+			result = append(result, mode)
+		}
+	}
+	if len(result) > 0 {
+		return result, nil
+	}
+	if len(suppressed) > 0 {
+		return nil, fmt.Errorf("selected TypeScript task modes are provided by workspace-root npm scripts: %s", strings.Join(selected, ", "))
+	}
+	return nil, fmt.Errorf("select typescript task modes with --task or use --all")
 }
 
 func printAddSummary(writer io.Writer, path string, tasksToReport []tasks.Task) int {

@@ -6,6 +6,8 @@ func NewSwiftTasks(root string) []Task {
 	return []Task{
 		newProcessTask("swift", "swift", "build", root, []string{"build"}, json.RawMessage(`"$swift"`), nil),
 		newProcessTask("swift", "swift", "test", root, []string{"test"}, json.RawMessage(`"$swift"`), nil),
+		newProcessTask("swift", "swift", "clean", root, []string{"package", "clean"}, json.RawMessage(`"$swift"`), nil),
+		newProcessTask("swift", "swift", "run", root, []string{"run"}, json.RawMessage(`"$swift"`), nil),
 	}
 }
 
@@ -36,7 +38,7 @@ func collectSwiftCandidates(workspaceRoot string) ([]TaskCandidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]TaskCandidate, 0, len(roots)*2)
+	candidates := make([]TaskCandidate, 0, len(roots)*4)
 	for _, root := range roots {
 		candidates = appendRootTaskCandidates(candidates, "swift", NewSwiftTasks(root), candidateDetail(root, "Package.swift"))
 	}

@@ -88,7 +88,9 @@ func TestAppRunAddNPMAll(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(`{
 		"scripts": {
 			"build": "tsc -p .",
-			"test": "go test ./..."
+			"test": "go test ./...",
+			"lint:fix": "eslint . --fix",
+			"prebuild": "node prep.js"
 		}
 	}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -107,13 +109,23 @@ func TestAppRunAddNPMAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(file.Tasks) != 2 {
-		t.Fatalf("expected 2 tasks, got %d", len(file.Tasks))
+	if len(file.Tasks) != 3 {
+		t.Fatalf("expected 3 tasks, got %d", len(file.Tasks))
 	}
 	if got, want := file.Tasks[0].Type, "npm"; got != want {
 		t.Fatalf("type = %q, want %q", got, want)
 	}
-	if !strings.Contains(stdout.String(), "added 2 tasks") {
+	byScript := make(map[string]bool, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byScript[task.Script] = true
+	}
+	if byScript["lint:fix"] {
+		t.Fatalf("saved npm scripts = %#v, did not expect lint:fix", byScript)
+	}
+	if !byScript["build"] || !byScript["test"] || !byScript["prebuild"] {
+		t.Fatalf("saved npm scripts = %#v, want build/test/prebuild", byScript)
+	}
+	if !strings.Contains(stdout.String(), "added 3 tasks") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
 }
@@ -148,6 +160,97 @@ func TestAppRunAddTypeScriptAll(t *testing.T) {
 	buildGroup, ok := tasks.ParseTaskGroup(file.Tasks[0].Group)
 	if !ok || buildGroup.Kind != "build" || !buildGroup.IsDefault {
 		t.Fatalf("build group = %+v, want default build group", buildGroup)
+	}
+}
+
+func TestAppRunAddTypeScriptAllSkipsModesProvidedByRootNPM(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(`{"scripts":{"build":"tsc -p ."}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tsconfig.json"), []byte(`{"compilerOptions":{"target":"ES2022"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "typescript", "--all"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(file.Tasks))
+	}
+	if got, want := file.Tasks[0].Label, "tsc-watch-tsconfig.json"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "added task \"tsc-watch-tsconfig.json\"") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestAppRunAddTypeScriptTaskSelectionSkipsSuppressedModes(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(`{"scripts":{"build":"tsc -p ."}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tsconfig.json"), []byte(`{"compilerOptions":{"target":"ES2022"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "typescript", "--task", "build,watch"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(file.Tasks))
+	}
+	if got, want := file.Tasks[0].Option, "watch"; got != want {
+		t.Fatalf("option = %q, want %q", got, want)
+	}
+}
+
+func TestAppRunAddTypeScriptFailsWhenRootNPMProvidesAllModes(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(`{"scripts":{"build":"tsc -p .","watch":"tsc -w -p ."}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tsconfig.json"), []byte(`{"compilerOptions":{"target":"ES2022"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "typescript", "--all"}); exitCode == 0 {
+		t.Fatal("expected non-zero exit code")
+	}
+	if !strings.Contains(stderr.String(), "workspace-root npm scripts take priority for: build, watch") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
 
@@ -375,6 +478,175 @@ func TestAppRunAddGoBenchOnly(t *testing.T) {
 		t.Fatalf("label = %q, want %q", got, want)
 	}
 	if !strings.Contains(stdout.String(), "added task \"go-bench\"") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestAppRunAddRustCreatesExtraTasks(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Cargo.toml"), []byte("[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "rust"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 4 {
+		t.Fatalf("expected 4 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["cargo-check"].Args), ","), "check"; got != want {
+		t.Fatalf("cargo-check args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["cargo-bench"].Args), ","), "bench"; got != want {
+		t.Fatalf("cargo-bench args = %q, want %q", got, want)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["cargo-check"].Group); ok {
+		t.Fatalf("cargo-check group = %+v, want no group", group)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["cargo-bench"].Group); ok {
+		t.Fatalf("cargo-bench group = %+v, want no group", group)
+	}
+	if !strings.Contains(stdout.String(), "added 4 tasks") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestAppRunAddSwiftCreatesExtraTasks(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	content := "// swift-tools-version: 5.9\nimport PackageDescription\nlet package = Package(name: \"Demo\")\n"
+	if err := os.WriteFile(filepath.Join(workspace, "Package.swift"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "swift"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 4 {
+		t.Fatalf("expected 4 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["swift-clean"].Args), ","), "package,clean"; got != want {
+		t.Fatalf("swift-clean args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["swift-run"].Args), ","), "run"; got != want {
+		t.Fatalf("swift-run args = %q, want %q", got, want)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["swift-clean"].Group); ok {
+		t.Fatalf("swift-clean group = %+v, want no group", group)
+	}
+	if group, ok := tasks.ParseTaskGroup(byLabel["swift-run"].Group); ok {
+		t.Fatalf("swift-run group = %+v, want no group", group)
+	}
+	if !strings.Contains(stdout.String(), "added 4 tasks") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestAppRunAddGradleCleanAndLintOnly(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "build.gradle"), []byte("plugins {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "gradle", "--task", "clean,lint"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["gradle-clean"].Args), ","), "clean"; got != want {
+		t.Fatalf("gradle-clean args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["gradle-lint"].Args), ","), "check"; got != want {
+		t.Fatalf("gradle-lint args = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "added 2 tasks") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestAppRunAddMavenCleanAndLintOnly(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "pom.xml"), []byte("<project/>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := NewApp(strings.NewReader(""), &stdout, &stderr)
+	app.wd = func() (string, error) { return workspace, nil }
+
+	if exitCode := app.Run([]string{"add", "maven", "--task", "clean,lint"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	file, err := tasks.LoadFile(tasks.ResolveLoadOptions("", workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(file.Tasks))
+	}
+	byLabel := make(map[string]tasks.Task, len(file.Tasks))
+	for _, task := range file.Tasks {
+		byLabel[task.Label] = task
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["maven-clean"].Args), ","), "clean"; got != want {
+		t.Fatalf("maven-clean args = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(tokensToStrings(byLabel["maven-lint"].Args), ","), "verify"; got != want {
+		t.Fatalf("maven-lint args = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "added 2 tasks") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
 }

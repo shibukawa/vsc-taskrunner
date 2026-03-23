@@ -122,6 +122,7 @@ runtask add maven --path server
 - Applies built-in problem matchers by default for rust, swift, gradle, and maven
 - Uses matcher arrays for rust, gradle, and maven so panic output and common Kotlin compiler output are also covered
 - Go build tasks default to `go build -trimpath -ldflags=-s -w ./...`, test tasks default to `go test -v ./...`, bench tasks default to `go test -run=^$ -bench=. -benchmem ./...`, cover tasks default to `go test -coverprofile=coverage.out ./...`, and lint tasks run `gofmt -l -w . && go vet ./...`
+- npm script candidates are limited to names that start with `pre` or `post`, or names that do not contain `:`
 
 ## Task naming and shortcuts
 
@@ -160,16 +161,16 @@ This check is not limited to one ecosystem. A default npm build task will block 
 | Ecosystem | Detect | Add | Saved form | Run | Default matcher | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | shell/process | No | Interactive only | shell/process | Yes | Only when explicitly set | Custom tasks |
-| npm | Yes | Yes | provider-like | Yes | None | Per-script, supports `--all` |
-| typescript | Yes | Yes | provider-like | Yes | `$tsc`, `$tsc-watch` | Generates `build` and `watch` |
+| npm | Yes | Yes | provider-like | Yes | None | Per-script, supports `--all`; candidates are `pre*`, `post*`, or colon-free names |
+| typescript | Yes | Yes | provider-like | Yes | `$tsc`, `$tsc-watch` | Generates `build` and `watch` unless workspace-root npm scripts of the same name exist |
 | gulp | Yes | Yes | provider-like | Yes | None | Task names are extracted from files |
 | grunt | Yes | Yes | provider-like | Yes | None | Task names are extracted from files |
 | jake | Yes | Yes | provider-like | Yes | None | Task names are extracted from files |
 | go | Yes | Yes | process/shell | Yes | `$go` | `go build -trimpath -ldflags=-s -w ./...`, `go test -v ./...`, `go test -run=^$ -bench=. -benchmem ./...`, `go test -coverprofile=coverage.out ./...`, `gofmt -l -w . && go vet ./...` |
-| rust | Yes | Yes | process | Yes | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test` |
-| swift | Yes | Yes | process | Yes | `$swift` | `swift build`, `swift test` |
-| gradle | Yes | Yes | process | Yes | `$gradle`, `$gradle-kotlin` | Prefers `gradlew` |
-| maven | Yes | Yes | process | Yes | `$maven`, `$maven-kotlin` | Prefers `mvnw` |
+| rust | Yes | Yes | process | Yes | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test`, `cargo check`, `cargo bench` |
+| swift | Yes | Yes | process | Yes | `$swift` | `swift build`, `swift test`, `swift package clean`, `swift run` |
+| gradle | Yes | Yes | process | Yes | `$gradle`, `$gradle-kotlin` | Prefers `gradlew`; exposes `build`, `test`, `clean`, `lint` |
+| maven | Yes | Yes | process | Yes | `$maven`, `$maven-kotlin` | Prefers `mvnw`; exposes `build`, `test`, `clean`, `lint` |
 
 ## Compatibility notes
 
@@ -189,12 +190,16 @@ runtask add npm --all
 runtask npm-test
 ```
 
+Scripts such as `lint:fix` are skipped, while `prebuild` or `postdeploy:prod` remain candidates.
+
 Add TypeScript build and watch tasks:
 
 ```sh
 runtask add typescript --all
 runtask tsc-watch-tsconfig.json
 ```
+
+If the workspace-root package.json already has `build` or `watch` scripts, runtask skips the matching TypeScript provider task and leaves the npm script as the preferred entry.
 
 Generate Go build, test, bench, cover, and lint tasks:
 
@@ -205,6 +210,38 @@ runtask go-bench
 runtask go-cover
 runtask go-lint
 ```
+
+Generate Rust build, test, check, and bench tasks:
+
+```sh
+runtask add rust
+runtask cargo-check
+runtask cargo-bench
+```
+
+Example output:
+
+```text
+$ runtask add rust
+added 4 tasks to .vscode/tasks.json: cargo-bench, cargo-build, cargo-check, cargo-test
+```
+
+Generate Swift build, test, clean, and run tasks:
+
+```sh
+runtask add swift
+runtask swift-clean
+runtask swift-run
+```
+
+Example output:
+
+```text
+$ runtask add swift
+added 4 tasks to .vscode/tasks.json: swift-build, swift-clean, swift-run, swift-test
+```
+
+`swift-run` requires a package with an executable target.
 
 Save detected gulp tasks directly:
 
