@@ -461,6 +461,8 @@ type ResolvedTask struct {
 	CommandToken   ResolvedToken   `json:"commandToken"`
 	Args           []string        `json:"args,omitempty"`
 	ArgTokens      []ResolvedToken `json:"argTokens,omitempty"`
+	DisplayCommand string          `json:"displayCommand,omitempty"`
+	DisplayArgs    []string        `json:"displayArgs,omitempty"`
 	DependsOn      []string        `json:"dependsOn,omitempty"`
 	DependsOrder   string          `json:"dependsOrder,omitempty"`
 	Options        ResolvedOptions `json:"options"`
@@ -472,8 +474,9 @@ type ResolvedTask struct {
 }
 
 type ResolvedToken struct {
-	Value   string `json:"value"`
-	Quoting string `json:"quoting,omitempty"`
+	Value        string `json:"value"`
+	DisplayValue string `json:"displayValue,omitempty"`
+	Quoting      string `json:"quoting,omitempty"`
 }
 
 type ResolvedOptions struct {
@@ -517,7 +520,9 @@ type LoadOptions struct {
 type ResolveOptions struct {
 	WorkspaceRoot  string
 	TaskFilePath   string
+	Inputs         []Input
 	InputValues    map[string]string
+	Redaction      RedactionPolicy
 	Env            []string
 	Stdin          io.Reader
 	Stdout         io.Writer

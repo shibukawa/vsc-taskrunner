@@ -86,6 +86,56 @@ func TestResolveFileRejectsUnsupportedVariables(t *testing.T) {
 	}
 }
 
+func TestResolveFileTracksRedactedDisplayValues(t *testing.T) {
+	t.Parallel()
+
+	file := &File{
+		Version: "2.0.0",
+		Inputs: []Input{{
+			ID:   "client_secret",
+			Type: "promptString",
+		}},
+		Tasks: []Task{{
+			Label:   "deploy",
+			Type:    "process",
+			Command: TokenValue{Value: "aws", Set: true},
+			Args: []TokenValue{
+				{Value: "deploy", Set: true},
+				{Value: "--token=${env:AWS_SECRET_ACCESS_KEY}", Set: true},
+				{Value: "--secret=${input:client_secret}", Set: true},
+				{Value: "--safe=${env:MONKEY}", Set: true},
+			},
+		}},
+	}
+
+	catalog, err := ResolveFile(file, ResolveOptions{
+		WorkspaceRoot: "/tmp/demo",
+		TaskFilePath:  "/tmp/demo/.vscode/tasks.json",
+		InputValues:   map[string]string{"client_secret": "input-secret"},
+		Redaction:     DefaultRedactionPolicy(),
+		Env:           []string{"AWS_SECRET_ACCESS_KEY=env-secret", "MONKEY=banana"},
+		Stdin:         strings.NewReader(""),
+		Stdout:        io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	task := catalog.Tasks["deploy"]
+	if got, want := task.Args[1], "--token=env-secret"; got != want {
+		t.Fatalf("arg[1] = %q, want %q", got, want)
+	}
+	if got, want := task.DisplayArgs[1], "--token=***"; got != want {
+		t.Fatalf("display arg[1] = %q, want %q", got, want)
+	}
+	if got, want := task.DisplayArgs[2], "--secret=***"; got != want {
+		t.Fatalf("display arg[2] = %q, want %q", got, want)
+	}
+	if got, want := task.DisplayArgs[3], "--safe=banana"; got != want {
+		t.Fatalf("display arg[3] = %q, want %q", got, want)
+	}
+}
+
 func TestResolveFileResolvesNPMTask(t *testing.T) {
 	t.Parallel()
 

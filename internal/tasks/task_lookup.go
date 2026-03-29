@@ -9,57 +9,75 @@ type TaskLookupResult struct {
 }
 
 func (c *Catalog) LookupTask(name string) TaskLookupResult {
-	if task, ok := c.Tasks[name]; ok {
-		return TaskLookupResult{Task: task, Label: name}
+	selection := lookupTaskSelection(name, c.Order, func(label string) bool {
+		_, ok := c.Tasks[label]
+		return ok
+	}, func(label string) []byte {
+		return c.Tasks[label].Group
+	})
+	if selection.Label == "" {
+		return TaskLookupResult{Candidates: selection.Candidates}
+	}
+	return TaskLookupResult{Task: c.Tasks[selection.Label], Label: selection.Label}
+}
+
+func lookupTaskSelection(name string, order []string, hasLabel func(string) bool, groupForLabel func(string) []byte) TaskLookupSelection {
+	if hasLabel(name) {
+		return TaskLookupSelection{Label: name}
 	}
 
 	if name == "build" || name == "test" {
-		defaultCandidates := c.groupCandidates(name, true)
+		defaultCandidates := groupCandidates(order, kindMatches(name, true, groupForLabel))
 		if len(defaultCandidates) == 1 {
-			label := defaultCandidates[0]
-			return TaskLookupResult{Task: c.Tasks[label], Label: label}
+			return TaskLookupSelection{Label: defaultCandidates[0]}
 		}
 		if len(defaultCandidates) > 1 {
-			return TaskLookupResult{Candidates: defaultCandidates}
+			return TaskLookupSelection{Candidates: defaultCandidates}
 		}
 
-		groupCandidates := c.groupCandidates(name, false)
-		if len(groupCandidates) > 0 {
-			return TaskLookupResult{Candidates: groupCandidates}
+		candidates := groupCandidates(order, kindMatches(name, false, groupForLabel))
+		if len(candidates) > 0 {
+			return TaskLookupSelection{Candidates: candidates}
 		}
 	}
 
-	actionCandidates := c.actionCandidates(name)
+	actionCandidates := actionCandidates(order, name)
 	if len(actionCandidates) == 1 {
-		label := actionCandidates[0]
-		return TaskLookupResult{Task: c.Tasks[label], Label: label}
+		return TaskLookupSelection{Label: actionCandidates[0]}
 	}
 	if len(actionCandidates) > 1 {
-		return TaskLookupResult{Candidates: actionCandidates}
+		return TaskLookupSelection{Candidates: actionCandidates}
 	}
 
-	return TaskLookupResult{}
+	return TaskLookupSelection{}
 }
 
-func (c *Catalog) groupCandidates(kind string, requireDefault bool) []string {
-	result := make([]string, 0)
-	for _, label := range c.Order {
-		task := c.Tasks[label]
-		group, ok := ParseTaskGroup(task.Group)
+func kindMatches(kind string, requireDefault bool, groupForLabel func(string) []byte) func(string) bool {
+	return func(label string) bool {
+		group, ok := ParseTaskGroup(groupForLabel(label))
 		if !ok || group.Kind != kind {
-			continue
+			return false
 		}
 		if requireDefault && !group.IsDefault {
-			continue
+			return false
 		}
-		result = append(result, label)
+		return true
+	}
+}
+
+func groupCandidates(order []string, match func(string) bool) []string {
+	result := make([]string, 0)
+	for _, label := range order {
+		if match(label) {
+			result = append(result, label)
+		}
 	}
 	return result
 }
 
-func (c *Catalog) actionCandidates(action string) []string {
+func actionCandidates(order []string, action string) []string {
 	result := make([]string, 0)
-	for _, label := range c.Order {
+	for _, label := range order {
 		if generatedActionAlias(label) == action {
 			result = append(result, label)
 		}

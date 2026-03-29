@@ -25,7 +25,10 @@ func LoadFile(options LoadOptions) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read tasks file %s: %w", options.Path, err)
 	}
+	return LoadFileFromBytes(content, options)
+}
 
+func LoadFileFromBytes(content []byte, options LoadOptions) (*File, error) {
 	standardized, err := hujson.Standardize(content)
 	if err != nil {
 		return nil, fmt.Errorf("parse tasks file %s: %w", options.Path, err)
@@ -51,7 +54,6 @@ func LoadFile(options LoadOptions) (*File, error) {
 	}
 	return &file, nil
 }
-
 func applyFileDefaults(file *File) {
 	platformDefaults := selectDefaults(file.Windows, file.OSX, file.Linux)
 	if platformDefaults == nil {

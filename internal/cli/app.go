@@ -44,6 +44,10 @@ func (a *App) Run(args []string) int {
 		return a.runAdd(args[1:])
 	case "run":
 		return a.runTask(args[1:])
+	case "ui":
+		return a.runUI(args[1:])
+	case "cleanup":
+		return a.runCleanup(args[1:])
 	case "help", "-h", "--help":
 		a.printUsage()
 		return 0
@@ -63,8 +67,10 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  runtask add <go|rust|swift|gradle|maven> [--workspace path] [--path dir] [--task ...] [--all]")
 	fmt.Fprintln(a.stderr, "    go: build,test,bench,cover,lint | rust: build,test,check,bench | swift: build,test,clean,run | gradle/maven: build,test,clean,lint")
 	fmt.Fprintln(a.stderr, "    target aliases: gradle -> java-gradle, maven -> java-maven")
-	fmt.Fprintln(a.stderr, "  runtask <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run] [--quiet] [--no-color|--force-color]")
-	fmt.Fprintln(a.stderr, "  runtask run <task-name> [--tasks path] [--workspace path] [--input key=value] [--json] [--dry-run] [--quiet] [--no-color|--force-color]")
+	fmt.Fprintln(a.stderr, "  runtask ui [--repo path] [--config path] [--host addr] [--port N] [--no-auth] [--open] [--redact-name NAME] [--redact-token TOKEN]")
+	fmt.Fprintln(a.stderr, "  runtask cleanup [--repo path] [--config path]")
+	fmt.Fprintln(a.stderr, "  runtask <task-name> [--tasks path] [--workspace path] [--input key=value] [--redact-name NAME] [--redact-token TOKEN] [--json] [--dry-run] [--quiet] [--no-color|--force-color]")
+	fmt.Fprintln(a.stderr, "  runtask run <task-name> [--tasks path] [--workspace path] [--input key=value] [--redact-name NAME] [--redact-token TOKEN] [--json] [--dry-run] [--quiet] [--no-color|--force-color]")
 }
 
 func (a *App) runList(args []string) int {
@@ -164,6 +170,8 @@ func (a *App) runTask(args []string) int {
 	var noColor bool
 	var forceColor bool
 	var inputAssignments multiFlag
+	var redactNames multiValueFlag
+	var redactTokens multiValueFlag
 
 	fs.StringVar(&tasksPath, "tasks", "", "path to tasks.json")
 	fs.StringVar(&workspaceRoot, "workspace", "", "workspace root")
@@ -173,6 +181,8 @@ func (a *App) runTask(args []string) int {
 	fs.BoolVar(&noColor, "no-color", false, "disable colored output")
 	fs.BoolVar(&forceColor, "force-color", false, "force colored output")
 	fs.Var(&inputAssignments, "input", "input value in key=value form; repeatable")
+	fs.Var(&redactNames, "redact-name", "extra secret-like env/input name to redact; repeatable")
+	fs.Var(&redactTokens, "redact-token", "extra secret-like env/input token to redact; repeatable")
 
 	flagArgs, taskName, err := splitRunArgs(args)
 	if err != nil {
@@ -209,6 +219,7 @@ func (a *App) runTask(args []string) int {
 		WorkspaceRoot:  loaderOptions.WorkspaceRoot,
 		TaskFilePath:   loaderOptions.Path,
 		InputValues:    inputAssignments.Map(),
+		Redaction:      tasks.MergeRedactionPolicies(tasks.DefaultRedactionPolicy(), tasks.NewRedactionPolicy(redactNames, redactTokens)),
 		Env:            a.env,
 		Stdin:          a.stdin,
 		Stdout:         a.stdout,
@@ -218,13 +229,8 @@ func (a *App) runTask(args []string) int {
 		resolverOptions.Stdout = io.Discard
 	}
 
-	catalog, err := tasks.ResolveFile(file, resolverOptions)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-
-	lookup := catalog.LookupTask(taskName)
+	definitions := tasks.BuildTaskDefinitionCatalog(file, resolverOptions.WorkspaceRoot, resolverOptions.TaskFilePath)
+	lookup := definitions.LookupTask(taskName)
 	if lookup.Label == "" {
 		if len(lookup.Candidates) > 0 {
 			if taskName == "build" || taskName == "test" {
@@ -240,12 +246,18 @@ func (a *App) runTask(args []string) int {
 		fmt.Fprintln(a.stderr, "use 'runtask add' to create a new task")
 		return 1
 	}
-	resolvedTask := lookup.Task
+	resolverOptions.Inputs = file.Inputs
+	catalog, err := tasks.ResolveTaskSelection(definitions, lookup.Label, resolverOptions)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
 	resolvedLabel := lookup.Label
+	resolvedTask := catalog.Tasks[resolvedLabel]
 
 	if dryRun {
 		if jsonOutput {
-			return writeJSON(a.stdout, resolvedTask)
+			return writeJSON(a.stdout, sanitizedResolvedTask(resolvedTask))
 		}
 		printDryRun(a.stdout, resolvedTask, catalog)
 		return 0
@@ -403,9 +415,17 @@ func printDryRunTask(writer io.Writer, task tasks.ResolvedTask, catalog *tasks.C
 	fmt.Fprintf(writer, "%s- %s\n", indent, task.Label)
 	fmt.Fprintf(writer, "%s  type: %s\n", indent, task.Type)
 	fmt.Fprintf(writer, "%s  cwd: %s\n", indent, task.Options.CWD)
-	fmt.Fprintf(writer, "%s  command: %s\n", indent, task.Command)
-	if len(task.Args) > 0 {
-		fmt.Fprintf(writer, "%s  args: %s\n", indent, strings.Join(task.Args, " | "))
+	command := task.DisplayCommand
+	if command == "" {
+		command = task.Command
+	}
+	fmt.Fprintf(writer, "%s  command: %s\n", indent, command)
+	args := task.DisplayArgs
+	if len(args) == 0 {
+		args = task.Args
+	}
+	if len(args) > 0 {
+		fmt.Fprintf(writer, "%s  args: %s\n", indent, strings.Join(args, " | "))
 	}
 	if group := taskGroupName(task.Group); group != "" {
 		fmt.Fprintf(writer, "%s  group: %s\n", indent, group)
@@ -461,4 +481,38 @@ func writerFile(writer io.Writer) *os.File {
 func readerFile(reader io.Reader) *os.File {
 	file, _ := reader.(*os.File)
 	return file
+}
+
+type multiValueFlag []string
+
+func (m *multiValueFlag) String() string {
+	return strings.Join(*m, ",")
+}
+
+func (m *multiValueFlag) Set(value string) error {
+	*m = append(*m, value)
+	return nil
+}
+
+func sanitizedResolvedTask(task tasks.ResolvedTask) tasks.ResolvedTask {
+	copyTask := task
+	copyTask.Command = task.DisplayCommand
+	if copyTask.Command == "" {
+		copyTask.Command = task.Command
+	}
+	copyTask.Args = append([]string(nil), task.DisplayArgs...)
+	if len(copyTask.Args) == 0 {
+		copyTask.Args = append([]string(nil), task.Args...)
+	}
+	copyTask.CommandToken.Value = task.CommandToken.DisplayValue
+	if copyTask.CommandToken.Value == "" {
+		copyTask.CommandToken.Value = task.CommandToken.Value
+	}
+	for index := range copyTask.ArgTokens {
+		copyTask.ArgTokens[index].Value = copyTask.ArgTokens[index].DisplayValue
+		if copyTask.ArgTokens[index].Value == "" {
+			copyTask.ArgTokens[index].Value = task.ArgTokens[index].Value
+		}
+	}
+	return copyTask
 }

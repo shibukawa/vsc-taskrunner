@@ -14,46 +14,48 @@ import (
 
 var variablePattern = regexp.MustCompile(`\$\{([^}]+)}`)
 
+func VariableNames(value string) []string {
+	matches := variablePattern.FindAllStringSubmatch(value, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	items := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) > 1 {
+			items = append(items, match[1])
+		}
+	}
+	return items
+}
+
+type resolvedText struct {
+	value        string
+	displayValue string
+	redacted     bool
+}
+
 func ResolveFile(file *File, options ResolveOptions) (*Catalog, error) {
-	inputResolver, err := newInputResolver(file.Inputs, options)
-	if err != nil {
-		return nil, err
-	}
-
-	defaults := TaskDefaults{
-		Options:      file.Options,
-		Presentation: file.Presentation,
-		RunOptions:   file.RunOptions,
-	}
-
+	options.Inputs = file.Inputs
+	definitions := BuildTaskDefinitionCatalog(file, options.WorkspaceRoot, options.TaskFilePath)
 	catalog := &Catalog{
 		WorkspaceRoot: options.WorkspaceRoot,
 		TaskFilePath:  options.TaskFilePath,
-		Tasks:         make(map[string]ResolvedTask, len(file.Tasks)),
-		Order:         make([]string, 0, len(file.Tasks)),
+		Tasks:         make(map[string]ResolvedTask, len(definitions.Tasks)),
+		Order:         make([]string, 0, len(definitions.Order)),
 	}
-
-	for _, task := range file.Tasks {
-		merged := mergeTaskDefaults(task, &defaults)
-		merged = mergeTaskDefaults(merged, selectDefaults(task.Windows, task.OSX, task.Linux))
-
-		resolved, err := resolveTask(merged, options, inputResolver)
+	for _, label := range definitions.Order {
+		partial, err := ResolveTaskSelection(definitions, label, options)
 		if err != nil {
-			return nil, fmt.Errorf("resolve task %s: %w", task.Label, err)
+			return nil, err
 		}
-		catalog.Tasks[resolved.Label] = resolved
-		catalog.Order = append(catalog.Order, resolved.Label)
+		task, ok := partial.Tasks[label]
+		if !ok {
+			continue
+		}
+		catalog.Tasks[label] = task
+		catalog.Order = append(catalog.Order, label)
 	}
-
 	sort.Strings(catalog.Order)
-	for _, task := range catalog.Tasks {
-		for _, dep := range task.DependsOn {
-			if _, ok := catalog.Tasks[dep]; !ok {
-				return nil, fmt.Errorf("task %s depends on unknown task %s", task.Label, dep)
-			}
-		}
-	}
-
 	return catalog, nil
 }
 
@@ -69,6 +71,7 @@ func resolveTask(task Task, options ResolveOptions, inputs *inputResolver) (Reso
 		cwd:           options.WorkspaceRoot,
 		env:           envMap(options.Env),
 		inputs:        inputs,
+		redaction:     options.Redaction,
 	}
 
 	adaptedTask, err := applyTaskAdapter(task, options.WorkspaceRoot, resolver)
@@ -97,23 +100,26 @@ func resolveTask(task Task, options ResolveOptions, inputs *inputResolver) (Reso
 	}
 
 	if task.Command.Set {
-		text, err := resolver.Resolve(task.Command.Value)
+		text, err := resolver.ResolveToken(task.Command.Value)
 		if err != nil {
 			return ResolvedTask{}, err
 		}
-		resolved.Command = text
-		resolved.CommandToken = ResolvedToken{Value: text, Quoting: task.Command.Quoting}
+		resolved.Command = text.value
+		resolved.DisplayCommand = text.displayValue
+		resolved.CommandToken = ResolvedToken{Value: text.value, DisplayValue: text.displayValue, Quoting: task.Command.Quoting}
 	}
 
 	resolved.Args = make([]string, 0, len(task.Args))
+	resolved.DisplayArgs = make([]string, 0, len(task.Args))
 	resolved.ArgTokens = make([]ResolvedToken, 0, len(task.Args))
 	for _, argument := range task.Args {
-		text, err := resolver.Resolve(argument.Value)
+		text, err := resolver.ResolveToken(argument.Value)
 		if err != nil {
 			return ResolvedTask{}, err
 		}
-		resolved.Args = append(resolved.Args, text)
-		resolved.ArgTokens = append(resolved.ArgTokens, ResolvedToken{Value: text, Quoting: argument.Quoting})
+		resolved.Args = append(resolved.Args, text.value)
+		resolved.DisplayArgs = append(resolved.DisplayArgs, text.displayValue)
+		resolved.ArgTokens = append(resolved.ArgTokens, ResolvedToken{Value: text.value, DisplayValue: text.displayValue, Quoting: argument.Quoting})
 	}
 
 	resolved.Options = ResolvedOptions{
@@ -169,55 +175,82 @@ type variableResolver struct {
 	cwd           string
 	env           map[string]string
 	inputs        *inputResolver
+	redaction     RedactionPolicy
 }
 
 func (v variableResolver) Resolve(value string) (string, error) {
+	result, err := v.ResolveToken(value)
+	if err != nil {
+		return "", err
+	}
+	return result.value, nil
+}
+
+func (v variableResolver) ResolveToken(value string) (resolvedText, error) {
 	matches := variablePattern.FindAllStringSubmatchIndex(value, -1)
 	if len(matches) == 0 {
-		return value, nil
+		return resolvedText{value: value, displayValue: value}, nil
 	}
 
-	var builder strings.Builder
+	var valueBuilder strings.Builder
+	var displayBuilder strings.Builder
 	last := 0
+	redacted := false
 	for _, match := range matches {
-		builder.WriteString(value[last:match[0]])
+		literal := value[last:match[0]]
+		valueBuilder.WriteString(literal)
+		displayBuilder.WriteString(literal)
 		name := value[match[2]:match[3]]
 		resolved, err := v.resolveVariable(name)
 		if err != nil {
-			return "", err
+			return resolvedText{}, err
 		}
-		builder.WriteString(resolved)
+		valueBuilder.WriteString(resolved.value)
+		displayBuilder.WriteString(resolved.displayValue)
+		redacted = redacted || resolved.redacted
 		last = match[1]
 	}
-	builder.WriteString(value[last:])
-	return builder.String(), nil
+	valueBuilder.WriteString(value[last:])
+	displayBuilder.WriteString(value[last:])
+	return resolvedText{
+		value:        valueBuilder.String(),
+		displayValue: displayBuilder.String(),
+		redacted:     redacted,
+	}, nil
 }
 
-func (v variableResolver) resolveVariable(name string) (string, error) {
+func (v variableResolver) resolveVariable(name string) (resolvedText, error) {
 	switch {
 	case name == "workspaceFolder":
-		return v.workspaceRoot, nil
+		return resolvedText{value: v.workspaceRoot, displayValue: v.workspaceRoot}, nil
 	case name == "workspaceFolderBasename":
-		return filepath.Base(v.workspaceRoot), nil
+		value := filepath.Base(v.workspaceRoot)
+		return resolvedText{value: value, displayValue: value}, nil
 	case name == "cwd":
 		if v.cwd != "" {
-			return v.cwd, nil
+			return resolvedText{value: v.cwd, displayValue: v.cwd}, nil
 		}
-		return v.workspaceRoot, nil
+		return resolvedText{value: v.workspaceRoot, displayValue: v.workspaceRoot}, nil
 	case name == "pathSeparator":
-		return string(filepath.Separator), nil
+		value := string(filepath.Separator)
+		return resolvedText{value: value, displayValue: value}, nil
 	case strings.HasPrefix(name, "env:"):
-		return v.env[strings.TrimPrefix(name, "env:")], nil
+		key := strings.TrimPrefix(name, "env:")
+		value := v.env[key]
+		if v.redaction.ShouldRedact(key) {
+			return resolvedText{value: value, displayValue: RedactedPlaceholder, redacted: true}, nil
+		}
+		return resolvedText{value: value, displayValue: value}, nil
 	case strings.HasPrefix(name, "input:"):
 		return v.inputs.Resolve(strings.TrimPrefix(name, "input:"))
 	case strings.HasPrefix(name, "command:"):
-		return "", fmt.Errorf("unsupported variable: ${%s}", name)
+		return resolvedText{}, fmt.Errorf("unsupported variable: ${%s}", name)
 	case strings.HasPrefix(name, "config:"):
-		return "", fmt.Errorf("unsupported variable: ${%s}", name)
+		return resolvedText{}, fmt.Errorf("unsupported variable: ${%s}", name)
 	case strings.HasPrefix(name, "file"):
-		return "", fmt.Errorf("unsupported variable: ${%s}", name)
+		return resolvedText{}, fmt.Errorf("unsupported variable: ${%s}", name)
 	default:
-		return "", fmt.Errorf("unsupported variable: ${%s}", name)
+		return resolvedText{}, fmt.Errorf("unsupported variable: ${%s}", name)
 	}
 }
 
@@ -225,14 +258,15 @@ type inputResolver struct {
 	inputs         map[string]Input
 	values         map[string]string
 	env            map[string]string
+	redaction      RedactionPolicy
 	reader         *bufio.Reader
 	writer         io.Writer
 	nonInteractive bool
 }
 
-func newInputResolver(inputs []Input, options ResolveOptions) (*inputResolver, error) {
-	items := make(map[string]Input, len(inputs))
-	for _, input := range inputs {
+func newInputResolver(options ResolveOptions) (*inputResolver, error) {
+	items := make(map[string]Input, len(options.Inputs))
+	for _, input := range options.Inputs {
 		if input.ID == "" {
 			return nil, fmt.Errorf("input is missing id")
 		}
@@ -242,6 +276,7 @@ func newInputResolver(inputs []Input, options ResolveOptions) (*inputResolver, e
 		inputs:         items,
 		values:         cloneMap(options.InputValues),
 		env:            envMap(options.Env),
+		redaction:      options.Redaction,
 		reader:         bufio.NewReader(options.Stdin),
 		writer:         options.Stdout,
 		nonInteractive: options.NonInteractive,
@@ -249,29 +284,36 @@ func newInputResolver(inputs []Input, options ResolveOptions) (*inputResolver, e
 	return resolver, nil
 }
 
-func (r *inputResolver) Resolve(id string) (string, error) {
+func (r *inputResolver) Resolve(id string) (resolvedText, error) {
 	if value, ok := r.values[id]; ok {
-		return value, nil
+		return r.toResolvedText(id, value), nil
 	}
 	if value, ok := r.env[inputEnvKey(id)]; ok {
 		r.values[id] = value
-		return value, nil
+		return r.toResolvedText(id, value), nil
 	}
 
 	input, ok := r.inputs[id]
 	if !ok {
-		return "", fmt.Errorf("unknown input: %s", id)
+		return resolvedText{}, fmt.Errorf("unknown input: %s", id)
 	}
 	if r.nonInteractive {
-		return "", fmt.Errorf("input %s requires a value in non-interactive mode", id)
+		return resolvedText{}, fmt.Errorf("input %s requires a value in non-interactive mode", id)
 	}
 
 	value, err := r.prompt(input)
 	if err != nil {
-		return "", err
+		return resolvedText{}, err
 	}
 	r.values[id] = value
-	return value, nil
+	return r.toResolvedText(id, value), nil
+}
+
+func (r *inputResolver) toResolvedText(id string, value string) resolvedText {
+	if r.redaction.ShouldRedact(id) {
+		return resolvedText{value: value, displayValue: RedactedPlaceholder, redacted: true}
+	}
+	return resolvedText{value: value, displayValue: value}
 }
 
 func (r *inputResolver) prompt(input Input) (string, error) {

@@ -89,6 +89,23 @@ func TestQuoteTokenForShellHonorsQuotingStyle(t *testing.T) {
 	}
 }
 
+func TestDisplayTaskCommandUsesRedactedDisplayValues(t *testing.T) {
+	t.Parallel()
+
+	task := ResolvedTask{
+		Label:          "deploy",
+		Type:           "process",
+		Command:        "aws",
+		DisplayCommand: "aws",
+		Args:           []string{"deploy", "--token=secret"},
+		DisplayArgs:    []string{"deploy", "--token=***"},
+	}
+
+	if got, want := DisplayTaskCommand(task), `aws deploy --token=***`; got != want {
+		t.Fatalf("display command = %q, want %q", got, want)
+	}
+}
+
 func TestRunnerCollectsProblemsFromInlineMatcher(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
@@ -247,6 +264,26 @@ func TestRunnerCollectsBuiltinJSHintStylishMatcher(t *testing.T) {
 	}
 	if result.Problems[0].Code != "033" {
 		t.Fatalf("code = %q", result.Problems[0].Code)
+	}
+}
+
+func TestMergeProcessEnvDropsEmptyOverlayEntries(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeProcessEnv([]string{"NO_COLOR=1", "TERM=dumb", "KEEP=value"}, map[string]string{
+		"NO_COLOR": "",
+		"TERM":     "xterm-256color",
+	})
+
+	joined := strings.Join(merged, "\n")
+	if strings.Contains(joined, "NO_COLOR=") {
+		t.Fatalf("expected NO_COLOR to be removed, got %q", joined)
+	}
+	if !strings.Contains(joined, "TERM=xterm-256color") {
+		t.Fatalf("expected TERM override, got %q", joined)
+	}
+	if !strings.Contains(joined, "KEEP=value") {
+		t.Fatalf("expected existing variables to remain, got %q", joined)
 	}
 }
 

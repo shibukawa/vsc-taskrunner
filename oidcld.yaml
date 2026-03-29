@@ -1,0 +1,55 @@
+oidcld:
+  iss: "http://oidc.localhost:18888"
+  pkce_required: false
+  nonce_required: false
+  expired_in: 3600
+  aud_claim_format: "string"
+  valid_scopes:
+    - "admin"
+    - "read"
+    - "write"
+  access_filter:
+    enabled: true
+    extra_allowed_ips: []
+    max_forwarded_hops: 0
+  login_ui:
+    env_title: "runtask local"
+    accent_color: "#106B4B"
+    info_markdown_file: "./oidcld-login-info.md"
+  refresh_token_enabled: true
+  refresh_token_expiry: 86400
+  end_session_enabled: true
+  end_session_endpoint_visible: true
+  verbose_logging: false
+
+cors:
+  enabled: true
+  allowed_origins:
+    - "http://localhost:8080"
+  allowed_methods:
+    - "GET"
+    - "POST"
+    - "OPTIONS"
+  allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+    - "Accept"
+
+users:
+  admin:
+    display_name: "Administrator"
+    extra_valid_scopes:
+      - "admin"
+    extra_claims:
+      email: "admin@example.com"
+      preferred_username: "admin@example.com"
+      role: "admin"
+  developer:
+    display_name: "Developer"
+    extra_valid_scopes:
+      - "read"
+      - "write"
+    extra_claims:
+      email: "developer@example.com"
+      preferred_username: "developer@example.com"
+      role: "developer"

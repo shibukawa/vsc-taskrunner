@@ -9,6 +9,12 @@ VS Code の tasks.json 互換を目指した CLI です。`tasks.json` を読み
 
 provider-like task は保存時には VS Code 互換の definition を維持し、実行時に concrete command へ resolve されます。
 
+## Background Attribution
+
+Copyright (c) 2024 by glitchworker (https://codepen.io/glitchworker/pen/jENZGOV)
+Released under the MIT license
+https://opensource.org/licenses/mit-license.php
+
 ## 基本動作
 
 ### task 一覧
