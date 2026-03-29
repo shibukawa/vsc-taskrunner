@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -103,6 +104,15 @@ func (r *Runner) runTask(ctx context.Context, label string, stack map[string]boo
 	childStack[label] = true
 
 	if dependencyExitCode, err := r.runDependencies(ctx, task, childStack); err != nil {
+		r.emitEvent(TaskEvent{
+			Type:         TaskEventSkip,
+			TaskLabel:    task.Label,
+			DependsOn:    append([]string(nil), task.DependsOn...),
+			DependsOrder: task.DependsOrder,
+			Status:       "skipped",
+			ExitCode:     dependencyExitCode,
+			EndTime:      time.Now().UTC(),
+		})
 		state.exitCode = dependencyExitCode
 		state.err = err
 		close(state.done)
@@ -161,7 +171,26 @@ func (r *Runner) runDependencies(ctx context.Context, task ResolvedTask, stack m
 }
 
 func (r *Runner) executeTask(ctx context.Context, task ResolvedTask) (int, error) {
+	startedAt := time.Now().UTC()
+	r.emitEvent(TaskEvent{
+		Type:         TaskEventStart,
+		TaskLabel:    task.Label,
+		DependsOn:    append([]string(nil), task.DependsOn...),
+		DependsOrder: task.DependsOrder,
+		Status:       "running",
+		StartTime:    startedAt,
+	})
 	if task.Command == "" {
+		r.emitEvent(TaskEvent{
+			Type:         TaskEventFinish,
+			TaskLabel:    task.Label,
+			DependsOn:    append([]string(nil), task.DependsOn...),
+			DependsOrder: task.DependsOrder,
+			Status:       "success",
+			ExitCode:     0,
+			StartTime:    startedAt,
+			EndTime:      time.Now().UTC(),
+		})
 		return 0, nil
 	}
 	start := time.Now()
@@ -182,14 +211,24 @@ func (r *Runner) executeTask(ctx context.Context, task ResolvedTask) (int, error
 
 	collector, err := newProblemCollector(task.Label, task.ProblemMatcher, r.catalog.WorkspaceRoot)
 	if err != nil {
+		r.emitEvent(TaskEvent{
+			Type:         TaskEventFinish,
+			TaskLabel:    task.Label,
+			DependsOn:    append([]string(nil), task.DependsOn...),
+			DependsOrder: task.DependsOrder,
+			Status:       "failed",
+			ExitCode:     1,
+			StartTime:    startedAt,
+			EndTime:      time.Now().UTC(),
+		})
 		return 1, err
 	}
-	outputWriter := newMatchedWriter(r.stdout, collector)
+	outputWriter := newMatchedWriter(task.Label, r.taskWriters(task), collector, r.emitLine)
 
 	r.record(TaskRun{
 		Label:    task.Label,
-		Command:  task.Command,
-		Args:     append([]string(nil), task.Args...),
+		Command:  task.displayCommandValue(),
+		Args:     task.displayArgsValue(),
 		CWD:      task.Options.CWD,
 		ExitCode: 0,
 	})
@@ -203,11 +242,65 @@ func (r *Runner) executeTask(ctx context.Context, task ResolvedTask) (int, error
 		exitCode := exitCode(runErr)
 		r.finishTask(task.Label, exitCode, problems, wallTime, userTime, systemTime)
 		r.printTaskFinish(task.Label, exitCode, wallTime, userTime, systemTime)
+		r.emitEvent(TaskEvent{
+			Type:         TaskEventFinish,
+			TaskLabel:    task.Label,
+			DependsOn:    append([]string(nil), task.DependsOn...),
+			DependsOrder: task.DependsOrder,
+			Status:       "failed",
+			ExitCode:     exitCode,
+			StartTime:    startedAt,
+			EndTime:      time.Now().UTC(),
+		})
 		return exitCode, fmt.Errorf("%w: %s", ErrTaskFailed, task.Label)
 	}
 	r.finishTask(task.Label, 0, problems, wallTime, userTime, systemTime)
 	r.printTaskFinish(task.Label, 0, wallTime, userTime, systemTime)
+	r.emitEvent(TaskEvent{
+		Type:         TaskEventFinish,
+		TaskLabel:    task.Label,
+		DependsOn:    append([]string(nil), task.DependsOn...),
+		DependsOrder: task.DependsOrder,
+		Status:       "success",
+		ExitCode:     0,
+		StartTime:    startedAt,
+		EndTime:      time.Now().UTC(),
+	})
 	return 0, nil
+}
+
+func (r *Runner) taskWriters(task ResolvedTask) io.Writer {
+	var writers []io.Writer
+	if r.stdout != nil {
+		writers = append(writers, r.stdout)
+	}
+	if r.options.TaskOutputWriter != nil {
+		if writer := r.options.TaskOutputWriter(task); writer != nil {
+			writers = append(writers, writer)
+		}
+	}
+	if len(writers) == 0 {
+		return nil
+	}
+	if len(writers) == 1 {
+		return writers[0]
+	}
+	return io.MultiWriter(writers...)
+}
+
+func (r *Runner) emitLine(taskLabel string, line string) {
+	r.emitEvent(TaskEvent{
+		Type:      TaskEventLine,
+		TaskLabel: taskLabel,
+		Line:      line,
+	})
+}
+
+func (r *Runner) emitEvent(event TaskEvent) {
+	if r.options.EventHandler == nil {
+		return
+	}
+	r.options.EventHandler(event)
 }
 
 func (r *Runner) record(run TaskRun) {
@@ -267,29 +360,48 @@ func (r *Runner) collectProblems() []Problem {
 }
 
 func renderShellCommand(task ResolvedTask) string {
+	return renderShellCommandWithMode(task, false)
+}
+
+func renderShellCommandForDisplay(task ResolvedTask) string {
+	return renderShellCommandWithMode(task, true)
+}
+
+func renderShellCommandWithMode(task ResolvedTask, display bool) string {
 	if len(task.Args) == 0 {
+		if display && task.DisplayCommand != "" {
+			return task.DisplayCommand
+		}
 		return task.Command
 	}
 
 	parts := make([]string, 0, len(task.ArgTokens)+1)
-	parts = append(parts, quoteTokenForShell(task.Options.Shell.Family, task.CommandToken, true))
+	parts = append(parts, quoteTokenForShellMode(task.Options.Shell.Family, task.CommandToken, true, display))
 	for _, arg := range task.ArgTokens {
-		parts = append(parts, quoteTokenForShell(task.Options.Shell.Family, arg, false))
+		parts = append(parts, quoteTokenForShellMode(task.Options.Shell.Family, arg, false, display))
 	}
 	return strings.Join(parts, " ")
 }
 
 func quoteTokenForShell(family string, token ResolvedToken, isCommand bool) string {
+	return quoteTokenForShellMode(family, token, isCommand, false)
+}
+
+func quoteTokenForShellMode(family string, token ResolvedToken, isCommand bool, display bool) string {
 	style := token.Quoting
+	value := token.Value
+	if display && token.DisplayValue != "" {
+		value = token.DisplayValue
+	}
 	if style == "" {
-		if isCommand || needsQuoting(family, token.Value) {
+		if isCommand || needsQuoting(family, value) {
 			style = "strong"
 		}
 	}
 	if style == "" {
-		return token.Value
+		return value
 	}
-	return quoteForShell(family, token.Value, style)
+	return quoteForShell(family, value, style)
 }
 
 func quoteForShell(family string, value string, style string) string {
@@ -377,6 +489,10 @@ func mergeProcessEnv(base []string, overlay map[string]string) []string {
 	}
 	items := envMap(base)
 	for key, value := range overlay {
+		if value == "" {
+			delete(items, key)
+			continue
+		}
 		items[key] = value
 	}
 	result := make([]string, 0, len(items))
@@ -384,6 +500,20 @@ func mergeProcessEnv(base []string, overlay map[string]string) []string {
 		result = append(result, key+"="+value)
 	}
 	return result
+}
+
+func (t ResolvedTask) displayCommandValue() string {
+	if t.DisplayCommand != "" {
+		return t.DisplayCommand
+	}
+	return t.Command
+}
+
+func (t ResolvedTask) displayArgsValue() []string {
+	if len(t.DisplayArgs) > 0 {
+		return append([]string(nil), t.DisplayArgs...)
+	}
+	return append([]string(nil), t.Args...)
 }
 
 func exitCode(err error) int {
@@ -407,18 +537,22 @@ type matchedWriter struct {
 	underlier io.Writer
 	collector *problemCollector
 	buffer    strings.Builder
+	emitLine  func(taskLabel string, line string)
+	taskLabel string
 }
 
-func newMatchedWriter(underlier io.Writer, collector *problemCollector) *matchedWriter {
-	return &matchedWriter{underlier: underlier, collector: collector}
+func newMatchedWriter(taskLabel string, underlier io.Writer, collector *problemCollector, emitLine func(taskLabel string, line string)) *matchedWriter {
+	return &matchedWriter{underlier: underlier, collector: collector, emitLine: emitLine, taskLabel: taskLabel}
 }
 
 func (w *matchedWriter) Write(data []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if _, err := w.underlier.Write(data); err != nil {
-		return 0, err
+	if w.underlier != nil {
+		if _, err := w.underlier.Write(data); err != nil {
+			return 0, err
+		}
 	}
 	w.buffer.Write(data)
 	for {
@@ -429,6 +563,9 @@ func (w *matchedWriter) Write(data []byte) (int, error) {
 		}
 		line := strings.TrimRight(text[:index], "\r")
 		w.collector.ProcessLine(line)
+		if w.emitLine != nil {
+			w.emitLine(w.taskLabel, line+"\n")
+		}
 		w.buffer.Reset()
 		w.buffer.WriteString(text[index+1:])
 	}
@@ -441,6 +578,13 @@ func (w *matchedWriter) Close() {
 	if w.buffer.Len() == 0 {
 		return
 	}
-	w.collector.ProcessLine(strings.TrimRight(w.buffer.String(), "\r"))
+	line := strings.TrimRight(w.buffer.String(), "\r")
+	w.collector.ProcessLine(line)
+	if w.emitLine != nil {
+		if !bytes.HasSuffix([]byte(line), []byte("\n")) {
+			line += "\n"
+		}
+		w.emitLine(w.taskLabel, line)
+	}
 	w.buffer.Reset()
 }

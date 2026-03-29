@@ -1,0 +1,44 @@
+services:
+  oidcld:
+    image: ghcr.io/shibukawa/oidcld:latest
+    command:
+      - serve
+      - --config
+      - /app/config/oidcld.yaml
+      - --port
+      - "18888"
+    ports:
+      - "18888:18888"
+    volumes:
+      - ./oidcld.yaml:/app/config/oidcld.yaml:ro
+      - ./oidcld-login-info.md:/app/config/oidcld-login-info.md:ro
+    environment:
+      OIDCLD_CONFIG: /app/config/oidcld.yaml
+    healthcheck:
+      test: ["CMD", "oidcld", "health", "--url", "http://localhost:18888"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  runtask-ui:
+    build:
+      context: .
+      target: web-runtime
+    command:
+      - ui
+      - --config
+      - /app/config/runtask-ui.yaml
+    working_dir: /app
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./runtask-ui.yaml:/app/config/runtask-ui.yaml:ro
+      - runtask-repos:/var/lib/runtask/repos
+    extra_hosts:
+      - "oidc.localhost:host-gateway"
+    depends_on:
+      oidcld:
+        condition: service_healthy
+
+volumes:
+  runtask-repos:

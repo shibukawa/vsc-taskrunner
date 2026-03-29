@@ -1,0 +1,97 @@
+services:
+  oidcld:
+    image: ghcr.io/shibukawa/oidcld:latest
+    command:
+      - serve
+      - --config
+      - /app/config/oidcld.yaml
+      - --port
+      - "18888"
+    ports:
+      - "18888:18888"
+    volumes:
+      - ./oidcld.yaml:/app/config/oidcld.yaml:ro
+      - ./oidcld-login-info.md:/app/config/oidcld-login-info.md:ro
+    environment:
+      OIDCLD_CONFIG: /app/config/oidcld.yaml
+    healthcheck:
+      test: ["CMD", "oidcld", "health", "--url", "http://localhost:18888"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs:3.90
+    command: ["master", "-mdir=/data", "-ip=seaweedfs-master"]
+    volumes:
+      - seaweedfs-master-data:/data
+    ports:
+      - "9333:9333"
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs:3.90
+    command: ["volume", "-mserver=seaweedfs-master:9333", "-dir=/data", "-ip=seaweedfs-volume"]
+    volumes:
+      - seaweedfs-volume-data:/data
+    depends_on:
+      - seaweedfs-master
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs:3.90
+    command: ["filer", "-master=seaweedfs-master:9333"]
+    depends_on:
+      - seaweedfs-master
+      - seaweedfs-volume
+
+  seaweedfs-s3:
+    image: chrislusf/seaweedfs:3.90
+    command: ["s3", "-filer=seaweedfs-filer:8888", "-port=8333"]
+    ports:
+      - "8333:8333"
+    depends_on:
+      - seaweedfs-filer
+
+  seaweedfs-init:
+    image: amazon/aws-cli:2.31.15
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        aws --endpoint-url http://seaweedfs-s3:8333 s3api create-bucket --bucket runtask || true
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: admin123
+      AWS_REGION: us-east-1
+    depends_on:
+      - seaweedfs-s3
+
+  runtask-ui:
+    build:
+      context: .
+      target: web-runtime
+    command:
+      - ui
+      - --config
+      - /app/config/runtask-ui.object.yaml
+    working_dir: /app
+    environment:
+      RUNTASK_EPHEMERAL_EMULATION_IDLE: 1m
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./runtask-ui.object.yaml:/app/config/runtask-ui.object.yaml:ro
+      - runtask-repos:/var/lib/runtask/repos
+      - runtask-history:/var/lib/runtask/history
+    extra_hosts:
+      - "oidc.localhost:host-gateway"
+    depends_on:
+      oidcld:
+        condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
+
+volumes:
+  runtask-repos:
+  runtask-history:
+  seaweedfs-master-data:
+  seaweedfs-volume-data:

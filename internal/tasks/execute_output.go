@@ -27,12 +27,14 @@ const (
 )
 
 type RunnerOptions struct {
-	OutputMode OutputMode
-	ColorMode  ColorMode
-	Input      io.Reader
-	InputFile  *os.File
-	OutputFile *os.File
-	MetaFile   *os.File
+	OutputMode       OutputMode
+	ColorMode        ColorMode
+	Input            io.Reader
+	InputFile        *os.File
+	OutputFile       *os.File
+	MetaFile         *os.File
+	EventHandler     func(TaskEvent)
+	TaskOutputWriter func(ResolvedTask) io.Writer
 }
 
 func normalizeRunnerOptions(options RunnerOptions) RunnerOptions {
@@ -45,6 +47,27 @@ func normalizeRunnerOptions(options RunnerOptions) RunnerOptions {
 	return options
 }
 
+type TaskEventType string
+
+const (
+	TaskEventStart  TaskEventType = "task-start"
+	TaskEventLine   TaskEventType = "task-line"
+	TaskEventFinish TaskEventType = "task-finish"
+	TaskEventSkip   TaskEventType = "task-skip"
+)
+
+type TaskEvent struct {
+	Type         TaskEventType `json:"type"`
+	TaskLabel    string        `json:"taskLabel"`
+	DependsOn    []string      `json:"dependsOn,omitempty"`
+	DependsOrder string        `json:"dependsOrder,omitempty"`
+	Status       string        `json:"status,omitempty"`
+	Line         string        `json:"line,omitempty"`
+	ExitCode     int           `json:"exitCode,omitempty"`
+	StartTime    time.Time     `json:"startTime,omitempty"`
+	EndTime      time.Time     `json:"endTime,omitempty"`
+}
+
 func (r *Runner) printTaskStart(task ResolvedTask) {
 	if r.options.OutputMode != OutputModeDefault {
 		return
@@ -53,7 +76,7 @@ func (r *Runner) printTaskStart(task ResolvedTask) {
 		return
 	}
 	fmt.Fprintf(r.stderr, "%s %s\n", r.decorate("🚀 run", ansiBlue), task.Label)
-	fmt.Fprintf(r.stderr, "   $ %s\n", displayTaskCommand(task))
+	fmt.Fprintf(r.stderr, "   $ %s\n", DisplayTaskCommand(task))
 	fmt.Fprintf(r.stderr, "   @ %s\n", task.Options.CWD)
 }
 
@@ -125,20 +148,32 @@ func colorizedEnv(base map[string]string, mode ColorMode) map[string]string {
 		result["CLICOLOR_FORCE"] = "0"
 		result["FORCE_COLOR"] = "0"
 	case ColorModeAlways:
+		result["NO_COLOR"] = ""
 		result["CLICOLOR"] = "1"
 		result["CLICOLOR_FORCE"] = "1"
 		result["FORCE_COLOR"] = "1"
+		if _, ok := result["TERM"]; !ok || strings.TrimSpace(result["TERM"]) == "" || result["TERM"] == "dumb" {
+			result["TERM"] = "xterm-256color"
+		}
 	}
 	return result
 }
 
-func displayTaskCommand(task ResolvedTask) string {
+func DisplayTaskCommand(task ResolvedTask) string {
 	if task.Type == "shell" {
-		return renderShellCommand(task)
+		return renderShellCommandForDisplay(task)
 	}
 	parts := make([]string, 0, len(task.Args)+1)
-	parts = append(parts, quoteDisplayPart(task.Command))
-	for _, arg := range task.Args {
+	command := task.DisplayCommand
+	if command == "" {
+		command = task.Command
+	}
+	parts = append(parts, quoteDisplayPart(command))
+	args := task.DisplayArgs
+	if len(args) == 0 {
+		args = task.Args
+	}
+	for _, arg := range args {
 		parts = append(parts, quoteDisplayPart(arg))
 	}
 	return strings.Join(parts, " ")

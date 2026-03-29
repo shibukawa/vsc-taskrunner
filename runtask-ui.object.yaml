@@ -1,0 +1,126 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+  publicURL: http://localhost:8080
+
+repository:
+  source: https://github.com/shibukawa/vsc-taskrunner-demo.git
+  cachePath: /var/lib/runtask/repos/demo-cache.git
+  auth:
+    type: envToken
+    provider: github
+    tokenEnv: GITHUB_FINE_GRAINED_TOKEN
+    repo: shibukawa/vsc-taskrunner-demo
+    allowedHosts:
+      - github.com
+      - api.github.com
+    # default: true
+    rejectBroadScope: true
+    # default: true
+    requireReadOnly: true
+
+auth:
+  oidcIssuer: http://oidc.localhost:18888
+  oidcClientID: runtask
+  oidcClientSecret: secret
+  noAuth: false
+  sessionSecret: change-this-for-shared-dev
+  # default: {} (empty means any authenticated user is allowed)
+  allowUsers: {}
+  # default: {} (empty means no admin users)
+  adminUsers:
+    role:
+      - admin
+  apiTokens:
+    enabled: true
+    # default: 720
+    defaultTTLHours: 720
+    # default: 10
+    maxPerUser: 10
+    store:
+      backend: object
+      object:
+        endpoint: http://127.0.0.1:9000
+        bucket: runtask-tokens
+        region: us-east-1
+        accessKey: minioadmin
+        secretKey: minioadmin
+        prefix: runtask/demo
+        forcePathStyle: true
+
+# default: top-level branches only when omitted
+branches:
+  - main
+  - dev
+  - work
+
+tasks:
+  build:
+    artifacts:
+      - path: dist
+        # default: zip
+        format: zip
+        # default: artifacts.zip
+        nameTemplate: frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip
+    preRunTask:
+      - command: npm
+        args:
+          - ci
+        cwd: ${workspaceFolder}
+    # default: false
+    worktreeDisabled: false
+  test:
+    preRunTask:
+      - command: npm
+        args:
+          - ci
+        cwd: ${workspaceFolder}
+  lint:
+    preRunTask:
+      - command: npm
+        args:
+          - ci
+        cwd: ${workspaceFolder}
+  show-input: {}
+  no-checkout-demo:
+    worktreeDisabled: true
+  demo-parallel: {}
+  demo-sequence: {}
+  demo-mixed: {}
+
+execution:
+  # default: 4, 0 means unlimited
+  maxParallelRuns: 2
+
+metrics:
+  # default: true
+  enabled: true
+  # default: 5
+  cpuInterval: 5
+  # default: 15
+  memoryInterval: 15
+  # default: 60
+  storageInterval: 60
+  # default: 300
+  memoryHistoryWindow: 300
+
+storage:
+  backend: object
+  # default: .runtask/history
+  historyDir: /var/lib/runtask/history
+  # default: 100
+  historyKeepCount: 50
+  object:
+    endpoint: http://seaweedfs-s3:8333
+    bucket: runtask
+    # default: us-east-1
+    region: us-east-1
+    accessKey: admin
+    secretKey: admin123
+    prefix: runtask
+    forcePathStyle: true
+  worktree:
+    # default: 0
+    keepOnSuccess: 0
+    # default: 3
+    keepOnFailure: 2

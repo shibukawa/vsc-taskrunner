@@ -9,6 +9,12 @@ It currently supports two families of tasks.
 
 Provider-like tasks keep a VS Code compatible task definition when saved, and are resolved into concrete commands only at runtime.
 
+## Background Attribution
+
+Copyright (c) 2024 by glitchworker (https://codepen.io/glitchworker/pen/jENZGOV)
+Released under the MIT license
+https://opensource.org/licenses/mit-license.php
+
 ## Basics
 
 ### List tasks

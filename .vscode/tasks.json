@@ -95,6 +95,47 @@
 			},
 			"problemMatcher": "$go",
 			"type":           "process"
+		},
+		{
+			"label":   "webdev-backend",
+			"type":    "shell",
+			"command": "docker compose up --build",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"isBackground":   true,
+			"presentation": {
+				"reveal": "always",
+				"panel":  "dedicated",
+				"group":  "webdev"
+			}
+		},
+		{
+			"label":   "webdev-frontend",
+			"type":    "shell",
+			"command": "npm run dev",
+			"options": {
+				"cwd": "${workspaceFolder}/ui"
+			},
+			"problemMatcher": [],
+			"isBackground":   true,
+			"presentation": {
+				"reveal": "always",
+				"panel":  "dedicated",
+				"group":  "webdev"
+			}
+		},
+		{
+			"label":      "webdev",
+			"dependsOn":  ["webdev-backend", "webdev-frontend"],
+			"dependsOrder": "parallel",
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel":  "dedicated",
+				"group":  "webdev"
+			}
 		}
 	]
 }
