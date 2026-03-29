@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   Branch, BranchTask, TaskInput, TaskRun, ArtifactItem, RunMeta,
   RunStartResponse, MeResponse, RouteState, SSETaskEvent,
-  MetricsSnapshot,
+  MetricsSnapshot, APITokenItem, APITokenCreateResponse,
 } from './types'
 import { parseAnsiToSegments } from './ansi'
 import BackgroundEffect from './components/BackgroundEffect.vue'
@@ -39,8 +39,29 @@ const currentUser = ref('')
 const userName = ref('')
 const userEmail = ref('')
 const canRun = ref(true)
+const isAdmin = ref(false)
+const canManageTokens = ref(false)
+const apiTokensEnabled = ref(false)
 const routeNotFound = ref(false)
 const backgroundPaused = ref(false)
+const tokenManagerOpen = ref(false)
+const tokenItems = ref<APITokenItem[]>([])
+const tokenLabel = ref('')
+const tokenTTLDays = ref(30)
+const tokenScopeRead = ref(true)
+const tokenScopeWrite = ref(true)
+const createdTokenValue = ref('')
+const createdTokenItemId = ref('')
+const createdTokenScopes = ref<string[]>([])
+const tokenLoading = ref(false)
+const tokenError = ref('')
+const tokenExampleBranch = ref<string | null>(null)
+const tokenExampleTask = ref<string | null>(null)
+const tokenExampleTasks = ref<BranchTask[]>([])
+const copiedToken = ref(false)
+const copiedCurlTarget = ref<'me' | 'runs' | 'run-post' | null>(null)
+let copiedTokenTimer: number | null = null
+let copiedCurlTimer: number | null = null
 
 let source: EventSource | null = null
 let metricsSource: EventSource | null = null
@@ -116,6 +137,15 @@ const selectedRunTaskStatus = computed(() => {
   }
   return runTasks.value.find((task) => task.label === selectedChildTask.value)?.status ?? 'pending'
 })
+const selectedTokenScopeValues = computed(() => selectedTokenScopes())
+const createTokenDisabled = computed(() => (
+  tokenLoading.value ||
+  tokenLabel.value.trim() === '' ||
+  tokenTTLDays.value < 1 ||
+  selectedTokenScopeValues.value.length === 0
+))
+const createdTokenHasReadScope = computed(() => createdTokenScopes.value.includes('runs:read'))
+const createdTokenHasWriteScope = computed(() => createdTokenScopes.value.includes('runs:write'))
 
 function parseRoute(pathname: string): RouteState {
   const parts = pathname.split('/').filter(Boolean).map((part) => decodeURIComponent(part))
@@ -244,6 +274,9 @@ async function loadMe() {
   userName.value = ''
   userEmail.value = ''
   canRun.value = true
+  isAdmin.value = false
+  canManageTokens.value = false
+  apiTokensEnabled.value = false
 
   try {
     const me = await api<MeResponse>('/api/me')
@@ -252,6 +285,9 @@ async function loadMe() {
     userName.value = me.claims?.name ?? me.claims?.preferred_username ?? me.subject ?? ''
     userEmail.value = me.claims?.email ?? me.subject ?? ''
     canRun.value = me.canRun ?? true
+    isAdmin.value = me.isAdmin ?? false
+    canManageTokens.value = me.canManageTokens ?? false
+    apiTokensEnabled.value = me.apiTokensEnabled ?? false
   } catch (error) {
     const message = asErrorMessage(error)
     if (isUnauthorizedMessage(message)) {
@@ -280,26 +316,365 @@ function logout() {
   window.location.href = '/auth/logout'
 }
 
+function selectedTokenScopes(): string[] {
+  const scopes: string[] = []
+  if (tokenScopeRead.value) {
+    scopes.push('runs:read')
+  }
+  if (tokenScopeWrite.value) {
+    scopes.push('runs:write')
+  }
+  return scopes
+}
+
+function currentOrigin(): string {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+  return window.location.origin
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`
+}
+
+function apiTokenBaseCurl(): string {
+  return `curl -H ${shellQuote(`Authorization: Bearer ${createdTokenValue.value}`)}`
+}
+
+function tokenExampleBranchOptions(): Branch[] {
+  return branches.value
+}
+
+async function loadBranchTasks(branch: string | null): Promise<BranchTask[]> {
+  if (!branch) {
+    return []
+  }
+  const cachedBranch = branches.value.find((item) => item.shortName === branch) ?? null
+  if (cachedBranch?.tasks) {
+    return cachedBranch.tasks
+  }
+  const data = await api<unknown>(`/api/git/branches/${encodeURIComponent(branch)}/tasks`)
+  const nextTasks = Array.isArray(data) ? (data as BranchTask[]) : []
+  branches.value = branches.value.map((item) => (
+    item.shortName === branch ? { ...item, tasks: nextTasks } : item
+  ))
+  return nextTasks
+}
+
+async function loadTokenExampleTasks(branch: string | null) {
+  tokenExampleTasks.value = await loadBranchTasks(branch)
+  if (!tokenExampleTasks.value.some((task) => task.label === tokenExampleTask.value)) {
+    tokenExampleTask.value = tokenExampleTasks.value[0]?.label ?? null
+  }
+}
+
+async function initializeTokenExampleSelection() {
+  const branchOptions = tokenExampleBranchOptions()
+  const nextBranch = (
+    (selectedBranch.value && branchOptions.some((branch) => branch.shortName === selectedBranch.value) && selectedBranch.value) ||
+    branchOptions[0]?.shortName ||
+    null
+  )
+  tokenExampleBranch.value = nextBranch
+  await loadTokenExampleTasks(nextBranch)
+  if (selectedTask.value && tokenExampleTasks.value.some((task) => task.label === selectedTask.value)) {
+    tokenExampleTask.value = selectedTask.value
+    return
+  }
+  tokenExampleTask.value = tokenExampleTasks.value[0]?.label ?? null
+}
+
+async function onTokenExampleBranchChange(branch: string) {
+  tokenExampleBranch.value = branch || null
+  tokenExampleTask.value = null
+  await loadTokenExampleTasks(tokenExampleBranch.value)
+}
+
+function postRunExampleBody(): Record<string, unknown> {
+  return {
+    branch: tokenExampleBranch.value ?? '',
+    taskLabel: tokenExampleTask.value ?? '',
+    inputValues: {},
+  }
+}
+
+function buildExampleCurl(kind: 'me' | 'runs' | 'run-post'): string {
+  const origin = currentOrigin()
+  const baseCurl = apiTokenBaseCurl()
+  switch (kind) {
+    case 'me':
+      return `${baseCurl} ${shellQuote(`${origin}/api/me`)}`
+    case 'runs':
+      return `${baseCurl} ${shellQuote(`${origin}/api/runs`)}`
+    case 'run-post':
+      return `${baseCurl} -H 'Content-Type: application/json' -X POST ${shellQuote(`${origin}/api/runs`)} -d ${shellQuote(JSON.stringify(postRunExampleBody()))}`
+  }
+}
+
+function markCopied(kind: 'token' | 'me' | 'runs' | 'run-post') {
+  if (typeof window === 'undefined') {
+    return
+  }
+  if (kind === 'token') {
+    copiedToken.value = true
+    if (copiedTokenTimer !== null) {
+      window.clearTimeout(copiedTokenTimer)
+    }
+    copiedTokenTimer = window.setTimeout(() => {
+      copiedToken.value = false
+      copiedTokenTimer = null
+    }, 1800)
+    return
+  }
+  copiedCurlTarget.value = kind
+  if (copiedCurlTimer !== null) {
+    window.clearTimeout(copiedCurlTimer)
+  }
+  copiedCurlTimer = window.setTimeout(() => {
+    copiedCurlTarget.value = null
+    copiedCurlTimer = null
+  }, 1800)
+}
+
+async function copyText(value: string, kind?: 'token' | 'me' | 'runs' | 'run-post') {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) {
+    return
+  }
+  await navigator.clipboard.writeText(value)
+  if (kind) {
+    markCopied(kind)
+  }
+}
+
+function buildOpenAPIYAML(): string {
+  const origin = currentOrigin()
+  const branchExample = tokenExampleBranch.value ?? ''
+  const taskExample = tokenExampleTask.value ?? ''
+  return [
+    'openapi: 3.0.3',
+    'info:',
+    '  title: runtask Batch API',
+    '  version: 1.0.0',
+    'servers:',
+    `  - url: ${JSON.stringify(origin)}`,
+    'components:',
+    '  securitySchemes:',
+    '    bearerAuth:',
+    '      type: http',
+    '      scheme: bearer',
+    '      bearerFormat: API token',
+    'security:',
+    '  - bearerAuth: []',
+    'paths:',
+    '  /api/me:',
+    '    get:',
+    '      summary: Get current subject and capabilities',
+    '      responses:',
+    "        '200':",
+    '          description: OK',
+    '  /api/runs:',
+    '    get:',
+    '      summary: List runs',
+    '      responses:',
+    "        '200':",
+    '          description: OK',
+    '    post:',
+    '      summary: Start a run',
+    '      requestBody:',
+    '        required: true',
+    '        content:',
+    '          application/json:',
+    '            schema:',
+    '              type: object',
+    '              properties:',
+    '                branch:',
+    '                  type: string',
+    '                taskLabel:',
+    '                  type: string',
+    '                inputValues:',
+    '                  type: object',
+    '                  additionalProperties:',
+    '                    type: string',
+    '            example:',
+    `              branch: ${JSON.stringify(branchExample)}`,
+    `              taskLabel: ${JSON.stringify(taskExample)}`,
+    '              inputValues: {}',
+    '      responses:',
+    "        '202':",
+    '          description: Accepted',
+    '  /api/runs/{runId}:',
+    '    get:',
+    '      summary: Get run details',
+    '      parameters:',
+    '        - name: runId',
+    '          in: path',
+    '          required: true',
+    '          schema:',
+    '            type: string',
+    '      responses:',
+    "        '200':",
+    '          description: OK',
+    '  /api/runs/{runId}/log:',
+    '    get:',
+    '      summary: Get combined log',
+    '      parameters:',
+    '        - name: runId',
+    '          in: path',
+    '          required: true',
+    '          schema:',
+    '            type: string',
+    '      responses:',
+    "        '200':",
+    '          description: OK',
+    '  /api/runs/{runId}/artifacts:',
+    '    get:',
+    '      summary: List artifacts',
+    '      parameters:',
+    '        - name: runId',
+    '          in: path',
+    '          required: true',
+    '          schema:',
+    '            type: string',
+    '      responses:',
+    "        '200':",
+    '          description: OK',
+    '  /api/runs/{runId}/worktree:',
+    '    get:',
+    '      summary: List worktree files',
+    '      parameters:',
+    '        - name: runId',
+    '          in: path',
+    '          required: true',
+    '          schema:',
+    '            type: string',
+    '      responses:',
+    "        '200':",
+    '          description: OK',
+    '',
+  ].join('\n')
+}
+
+async function downloadOpenAPIYAML() {
+  if (typeof document === 'undefined') {
+    return
+  }
+  const blob = new Blob([buildOpenAPIYAML()], { type: 'application/yaml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'runtask-api.yaml'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function closeTokenManager() {
+  tokenManagerOpen.value = false
+  tokenError.value = ''
+  createdTokenValue.value = ''
+  createdTokenItemId.value = ''
+  createdTokenScopes.value = []
+  copiedToken.value = false
+  copiedCurlTarget.value = null
+}
+
+async function loadAPITokens() {
+  tokenItems.value = await api<APITokenItem[]>('/api/tokens')
+}
+
+async function openTokenManager() {
+  if (!canManageTokens.value) {
+    return
+  }
+  tokenManagerOpen.value = true
+  tokenError.value = ''
+  createdTokenValue.value = ''
+  createdTokenItemId.value = ''
+  createdTokenScopes.value = []
+  tokenLabel.value = ''
+  tokenTTLDays.value = 30
+  tokenScopeRead.value = true
+  tokenScopeWrite.value = true
+  await initializeTokenExampleSelection()
+  await loadAPITokens()
+}
+
+async function createAPIToken() {
+  if (createTokenDisabled.value) {
+    return
+  }
+  tokenLoading.value = true
+  tokenError.value = ''
+  try {
+    const response = await api<APITokenCreateResponse>('/api/tokens', {
+      method: 'POST',
+      body: JSON.stringify({
+        label: tokenLabel.value.trim(),
+        ttlHours: tokenTTLDays.value * 24,
+        scopes: selectedTokenScopeValues.value,
+      }),
+    })
+    createdTokenValue.value = response.token
+    createdTokenItemId.value = response.item.id
+    createdTokenScopes.value = [...response.item.scopes]
+    tokenLabel.value = ''
+    tokenTTLDays.value = 30
+    tokenScopeRead.value = true
+    tokenScopeWrite.value = true
+    await loadAPITokens()
+  } catch (error) {
+    tokenError.value = asErrorMessage(error)
+  } finally {
+    tokenLoading.value = false
+  }
+}
+
+async function revokeAPIToken(tokenId: string) {
+  tokenLoading.value = true
+  tokenError.value = ''
+  try {
+    await api<{ status: string }>(`/api/tokens/${encodeURIComponent(tokenId)}/revoke`, {
+      method: 'POST',
+    })
+    await loadAPITokens()
+  } catch (error) {
+    tokenError.value = asErrorMessage(error)
+  } finally {
+    tokenLoading.value = false
+  }
+}
+
+async function copyCreatedToken() {
+  if (!createdTokenValue.value) {
+    return
+  }
+  await copyText(createdTokenValue.value, 'token')
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) {
+    return 'Never'
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString()
+}
+
 async function loadBranches() {
   const data = await api<unknown>('/api/git/branches')
   branches.value = Array.isArray(data) ? (data as Branch[]) : []
 }
 
 async function loadTasksForBranch(branch: string | null) {
-  if (!branch) {
-    tasks.value = []
-    return
-  }
+  tasks.value = await loadBranchTasks(branch)
   const cachedBranch = branches.value.find((item) => item.shortName === branch) ?? null
-  if (cachedBranch?.tasks) {
-    tasks.value = cachedBranch.tasks
-    if (cachedBranch.loadError) {
-      errorMessage.value = cachedBranch.loadError
-    }
-    return
+  if (cachedBranch?.loadError) {
+    errorMessage.value = cachedBranch.loadError
   }
-  const data = await api<unknown>(`/api/git/branches/${encodeURIComponent(branch)}/tasks`)
-  tasks.value = Array.isArray(data) ? (data as BranchTask[]) : []
 }
 
 async function loadRuns() {
@@ -765,6 +1140,12 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopLogStream()
   stopMetricsStream()
+  if (copiedTokenTimer !== null) {
+    window.clearTimeout(copiedTokenTimer)
+  }
+  if (copiedCurlTimer !== null) {
+    window.clearTimeout(copiedCurlTimer)
+  }
   window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('keydown', handleKeydown)
 })
@@ -792,10 +1173,12 @@ onBeforeUnmount(() => {
           :auth-required="authRequired"
           :login-path="loginPath"
           :authenticated="authenticated"
+          :can-manage-tokens="canManageTokens"
           :current-user="currentUser"
           :user-name="userName"
           :user-email="userEmail"
           :background-paused="backgroundPaused"
+          @open-token-manager="openTokenManager"
           @logout="logout"
           @update:background-paused="backgroundPaused = $event"
         />
@@ -880,6 +1263,108 @@ onBeforeUnmount(() => {
             <div class="run-dialog-actions">
               <button class="ghost compact-button" :disabled="loading" @click="closeRunDialog">Cancel</button>
               <button class="primary compact-button" :disabled="loading" @click="confirmRunDialog">Run</button>
+            </div>
+          </section>
+        </div>
+
+        <div v-if="tokenManagerOpen" class="run-dialog-backdrop" @click.self="closeTokenManager">
+          <section class="glass-panel run-dialog token-dialog" role="dialog" aria-modal="true" aria-labelledby="token-dialog-title">
+            <div class="panel-head">
+              <div>
+                <h2 id="token-dialog-title">API Tokens</h2>
+                <p class="panel-subtitle">batch execution and run history access</p>
+              </div>
+              <div class="panel-tools">
+                <button class="ghost compact-button" type="button" @click="downloadOpenAPIYAML">Download OpenAPI YAML</button>
+              </div>
+            </div>
+
+            <div class="run-dialog-fields">
+              <label class="run-dialog-field">
+                <span>Label</span>
+                <input :value="tokenLabel" type="text" placeholder="CI deploy token" @input="tokenLabel = ($event.target as HTMLInputElement).value" />
+              </label>
+              <label class="run-dialog-field">
+                <span>TTL Days</span>
+                <input :value="tokenTTLDays" type="number" min="1" step="1" @input="tokenTTLDays = Number(($event.target as HTMLInputElement).value || 0)" />
+              </label>
+              <label class="run-dialog-field token-scope-row">
+                <input v-model="tokenScopeRead" type="checkbox" />
+                <span>runs:read</span>
+              </label>
+              <label class="run-dialog-field token-scope-row">
+                <input v-model="tokenScopeWrite" type="checkbox" />
+                <span>runs:write</span>
+              </label>
+            </div>
+            <p v-if="selectedTokenScopeValues.length === 0" class="artifact-meta token-helper-text">少なくとも1つの scope を選択してください</p>
+
+            <p v-if="tokenError" class="error-banner token-error">{{ tokenError }}</p>
+
+            <div class="run-dialog-actions">
+              <button class="ghost compact-button" :disabled="tokenLoading" type="button" @click="closeTokenManager">Close</button>
+              <button class="primary compact-button" :disabled="createTokenDisabled" type="button" @click="createAPIToken">Create Token</button>
+            </div>
+
+            <div v-if="apiTokensEnabled" class="token-list">
+              <article v-for="item in tokenItems" :key="item.id" class="artifact-card">
+                <strong>{{ item.label }}</strong>
+                <span class="artifact-meta">Scopes: {{ item.scopes.join(', ') }}</span>
+                <span class="artifact-meta">Created: {{ formatDateTime(item.createdAt) }}</span>
+                <span class="artifact-meta">Last used: {{ formatDateTime(item.lastUsedAt) }}</span>
+                <span class="artifact-meta">Expires: {{ formatDateTime(item.expiresAt) }}</span>
+                <span v-if="item.revokedAt" class="artifact-meta">Revoked: {{ formatDateTime(item.revokedAt) }}</span>
+                <div v-if="createdTokenValue && item.id === createdTokenItemId" class="token-created-box">
+                  <span class="summary-label">Token</span>
+                  <div class="token-created-row">
+                    <code class="token-created-value">{{ createdTokenValue }}</code>
+                    <button class="ghost compact-button" type="button" @click="copyCreatedToken">{{ copiedToken ? 'Copied' : 'Copy' }}</button>
+                  </div>
+                  <div class="token-example-list">
+                    <article class="artifact-card token-example-card">
+                      <div class="token-example-copy">
+                        <div>
+                          <strong>GET /api/me</strong>
+                          <div class="artifact-meta">current subject and capabilities</div>
+                        </div>
+                        <button class="ghost compact-button" type="button" @click="void copyText(buildExampleCurl('me'), 'me')">{{ copiedCurlTarget === 'me' ? 'Copied' : 'Copy curl' }}</button>
+                      </div>
+                    </article>
+                    <article v-if="createdTokenHasReadScope" class="artifact-card token-example-card">
+                      <div class="token-example-copy">
+                        <div>
+                          <strong>GET /api/runs</strong>
+                          <div class="artifact-meta">list available runs</div>
+                        </div>
+                        <button class="ghost compact-button" type="button" @click="void copyText(buildExampleCurl('runs'), 'runs')">{{ copiedCurlTarget === 'runs' ? 'Copied' : 'Copy curl' }}</button>
+                      </div>
+                    </article>
+                    <article v-if="createdTokenHasWriteScope" class="artifact-card token-example-card">
+                      <div class="token-endpoint-row">
+                        <div class="token-endpoint-url">
+                          <strong>POST /api/runs</strong>
+                          <div class="artifact-meta">{{ currentOrigin() }}/api/runs</div>
+                        </div>
+                        <select class="token-endpoint-select" :value="tokenExampleBranch ?? ''" @change="void onTokenExampleBranchChange(($event.target as HTMLSelectElement).value)">
+                          <option v-for="branch in branches" :key="branch.shortName" :value="branch.shortName">
+                            {{ branch.shortName }}
+                          </option>
+                        </select>
+                        <select class="token-endpoint-select" :value="tokenExampleTask ?? ''" :disabled="tokenExampleTasks.length === 0" @change="tokenExampleTask = ($event.target as HTMLSelectElement).value || null">
+                          <option v-if="tokenExampleTasks.length === 0" value="">No tasks available</option>
+                          <option v-for="task in tokenExampleTasks" :key="task.label" :value="task.label">
+                            {{ task.label }}
+                          </option>
+                        </select>
+                        <button class="ghost compact-button" :disabled="!tokenExampleBranch || !tokenExampleTask" type="button" @click="void copyText(buildExampleCurl('run-post'), 'run-post')">{{ copiedCurlTarget === 'run-post' ? 'Copied' : 'Copy curl' }}</button>
+                      </div>
+                    </article>
+                  </div>
+                </div>
+                <div class="run-dialog-actions">
+                  <button class="ghost compact-button" :disabled="tokenLoading || !!item.revokedAt" type="button" @click="revokeAPIToken(item.id)">Revoke</button>
+                </div>
+              </article>
             </div>
           </section>
         </div>

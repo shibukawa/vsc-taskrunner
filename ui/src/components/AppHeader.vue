@@ -5,6 +5,7 @@ const props = defineProps<{
   authRequired: boolean
   loginPath: string
   authenticated: boolean
+  canManageTokens: boolean
   currentUser: string
   userName: string
   userEmail: string
@@ -13,6 +14,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   logout: []
+  'open-token-manager': []
   'update:backgroundPaused': [value: boolean]
 }>()
 
@@ -117,6 +119,7 @@ onBeforeUnmount(() => {
               <span class="menu-label">Email</span>
               <strong class="menu-value">{{ userEmail || currentUser || 'Not available' }}</strong>
             </div>
+            <button v-if="canManageTokens" class="menu-action" type="button" @click="emit('open-token-manager')">API Tokens</button>
             <button class="menu-action danger" type="button" @click="emit('logout')">Logout</button>
           </div>
         </div>

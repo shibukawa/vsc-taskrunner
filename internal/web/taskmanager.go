@@ -209,11 +209,11 @@ func (tm *TaskManager) hasActiveRuns() bool {
 // StartRun begins executing taskLabel from branch in the background.
 // It returns the new run metadata immediately; the run itself runs asynchronously.
 func (tm *TaskManager) StartRun(ctx context.Context, branch, taskLabel, user string) (*RunMeta, error) {
-	return tm.StartRunWithInputs(ctx, branch, taskLabel, user, nil)
+	return tm.StartRunWithInputs(ctx, branch, taskLabel, user, "", nil)
 }
 
-func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel, user string, inputValues map[string]string) (*RunMeta, error) {
-	meta, err := tm.history.AllocateRunWithUser(branch, taskLabel, user)
+func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel, user, tokenLabel string, inputValues map[string]string) (*RunMeta, error) {
+	meta, err := tm.history.AllocateRunWithUser(branch, taskLabel, user, tokenLabel)
 	if err != nil {
 		return nil, fmt.Errorf("allocate run: %w", err)
 	}
@@ -227,6 +227,7 @@ func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel
 	meta.Status = RunStatusRunning
 	meta.StartTime = time.Now().UTC()
 	meta.User = user
+	meta.TokenLabel = tokenLabel
 	meta.InputValues = cloneStringMap(inputValues)
 
 	active := &ActiveRun{

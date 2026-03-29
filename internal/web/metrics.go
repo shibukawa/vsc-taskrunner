@@ -20,10 +20,10 @@ import (
 )
 
 type MetricsSnapshot struct {
-	UpdatedAt string         `json:"updatedAt"`
-	CPU       CPUMetric      `json:"cpu"`
-	Memory    MemoryMetric   `json:"memory"`
-	Storage   StorageMetric  `json:"storage"`
+	UpdatedAt string        `json:"updatedAt"`
+	CPU       CPUMetric     `json:"cpu"`
+	Memory    MemoryMetric  `json:"memory"`
+	Storage   StorageMetric `json:"storage"`
 }
 
 type CPUMetric struct {

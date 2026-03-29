@@ -25,14 +25,23 @@ auth:
   oidcClientSecret: secret
   noAuth: false
   sessionSecret: change-this-for-shared-dev
-  # default: [] (empty means any authenticated user is allowed)
-  allowUsers:
-    role:
-      - runner
-  # default: [] (empty means no admin users)
+  # default: {} (empty means any authenticated user is allowed)
+  allowUsers: {}
+  # default: {} (empty means no admin users)
   adminUsers:
     role:
-      - administrator
+      - admin
+  apiTokens:
+    enabled: true
+    # default: 720
+    defaultTTLHours: 720
+    # default: 10
+    maxPerUser: 10
+    store:
+      # default: local
+      backend: local
+      # default: .runtask/api-tokens.json
+      localPath: .runtask/api-tokens.json
 
 # default: top-level branches only when omitted
 branches:

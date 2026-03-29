@@ -183,7 +183,7 @@ func TestAllocateRunIsUniqueUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ref, allocErr := store.AllocateRunWithUser("main", "build", "alice")
+			ref, allocErr := store.AllocateRunWithUser("main", "build", "alice", "")
 			if allocErr != nil {
 				t.Error(allocErr)
 				return
@@ -214,7 +214,7 @@ func TestListUsesIndexedHistoryWithoutMetaScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref, err := store.AllocateRunWithUser("main", "build", "alice")
+	ref, err := store.AllocateRunWithUser("main", "build", "alice", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,17 +310,19 @@ type historyTestRunStore struct {
 	metas []*RunMeta
 }
 
-func (s *historyTestRunStore) RunDir(runID string) string                            { return "" }
-func (s *historyTestRunStore) LogPath(runID string) string                           { return "" }
-func (s *historyTestRunStore) TaskLogPath(runID, taskLabel string) string            { return "" }
-func (s *historyTestRunStore) WorktreePath(runID string) string                      { return "" }
-func (s *historyTestRunStore) ArtifactDir(runID string) string                       { return "" }
-func (s *historyTestRunStore) MetaPath(runID string) string                          { return "" }
-func (s *historyTestRunStore) WriteMeta(meta *RunMeta) error                         { return nil }
-func (s *historyTestRunStore) ListMetas(ctx context.Context) ([]*RunMeta, error)     { return s.metas, nil }
-func (s *historyTestRunStore) ReadMeta(runID string) (*RunMeta, error)               { return nil, os.ErrNotExist }
-func (s *historyTestRunStore) ReadLog(runID string) ([]byte, error)                  { return nil, os.ErrNotExist }
-func (s *historyTestRunStore) ReadTaskLog(runID, taskLabel string) ([]byte, error)   { return nil, os.ErrNotExist }
+func (s *historyTestRunStore) RunDir(runID string) string                        { return "" }
+func (s *historyTestRunStore) LogPath(runID string) string                       { return "" }
+func (s *historyTestRunStore) TaskLogPath(runID, taskLabel string) string        { return "" }
+func (s *historyTestRunStore) WorktreePath(runID string) string                  { return "" }
+func (s *historyTestRunStore) ArtifactDir(runID string) string                   { return "" }
+func (s *historyTestRunStore) MetaPath(runID string) string                      { return "" }
+func (s *historyTestRunStore) WriteMeta(meta *RunMeta) error                     { return nil }
+func (s *historyTestRunStore) ListMetas(ctx context.Context) ([]*RunMeta, error) { return s.metas, nil }
+func (s *historyTestRunStore) ReadMeta(runID string) (*RunMeta, error)           { return nil, os.ErrNotExist }
+func (s *historyTestRunStore) ReadLog(runID string) ([]byte, error)              { return nil, os.ErrNotExist }
+func (s *historyTestRunStore) ReadTaskLog(runID, taskLabel string) ([]byte, error) {
+	return nil, os.ErrNotExist
+}
 func (s *historyTestRunStore) TailLog(runID string, byteOffset int64) ([]byte, error) {
 	return nil, os.ErrNotExist
 }

@@ -23,8 +23,12 @@ import (
 type contextKey string
 
 const (
-	claimsContextKey  contextKey = "runtask.auth.claims"
-	defaultSessionTTL            = 24 * time.Hour
+	claimsContextKey      contextKey = "runtask.auth.claims"
+	authMethodContextKey  contextKey = "runtask.auth.method"
+	tokenIDContextKey     contextKey = "runtask.auth.token.id"
+	tokenLabelContextKey  contextKey = "runtask.auth.token.label"
+	tokenScopesContextKey contextKey = "runtask.auth.token.scopes"
+	defaultSessionTTL                = 24 * time.Hour
 )
 
 // SessionClaims is stored in the signed session cookie.
@@ -40,12 +44,18 @@ type Authenticator struct {
 	verifier     *oidc.IDTokenVerifier
 	oauth2Config oauth2.Config
 	config       *uiconfig.UIConfig
+	tokenService *APITokenService
 
 	sessionCookie string
 	stateCookie   string
 	nonceCookie   string
 	pkceCookie    string
 	signerKey     []byte
+}
+
+type AuthPolicy struct {
+	AllowBearer         bool
+	RequiredTokenScopes []string
 }
 
 // NewAuthenticator constructs an OIDC authenticator from UI config.
@@ -104,20 +114,45 @@ func (a *Authenticator) Enabled() bool {
 	return a != nil && a.enabled
 }
 
-// RequireAuth validates session cookie and injects claims into context.
+func (a *Authenticator) SetTokenService(service *APITokenService) {
+	if a == nil {
+		return
+	}
+	a.tokenService = service
+}
+
+func (a *Authenticator) TokenService() *APITokenService {
+	if a == nil {
+		return nil
+	}
+	return a.tokenService
+}
+
+// RequireAuth validates session or bearer auth and injects claims into context.
 func (a *Authenticator) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return a.RequireAuthWithPolicy(AuthPolicy{}, next)
+}
+
+func (a *Authenticator) RequireAuthWithPolicy(policy AuthPolicy, next http.HandlerFunc) http.HandlerFunc {
 	if !a.Enabled() {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		claims, err := a.sessionClaimsFromRequest(r)
+		claims, authMethod, tokenID, tokenLabel, tokenScopes, err := a.authenticateRequest(r, policy)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error":     "unauthorized",
-				"loginPath": "/auth/login",
-			})
+			if errors.Is(err, ErrAPITokenScopeDenied) {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "api token does not grant access to this endpoint",
+				})
+			} else {
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error":     "unauthorized",
+					"loginPath": "/auth/login",
+				})
+			}
 			return
 		}
 		if !a.config.MatchUser(claims) {
@@ -127,6 +162,16 @@ func (a *Authenticator) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		ctx := context.WithValue(r.Context(), claimsContextKey, claims)
+		ctx = context.WithValue(ctx, authMethodContextKey, authMethod)
+		if tokenID != "" {
+			ctx = context.WithValue(ctx, tokenIDContextKey, tokenID)
+		}
+		if tokenLabel != "" {
+			ctx = context.WithValue(ctx, tokenLabelContextKey, tokenLabel)
+		}
+		if len(tokenScopes) > 0 {
+			ctx = context.WithValue(ctx, tokenScopesContextKey, append([]string(nil), tokenScopes...))
+		}
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -317,6 +362,26 @@ func ClaimsFromContext(ctx context.Context) map[string]interface{} {
 	return claims
 }
 
+func AuthMethodFromContext(ctx context.Context) string {
+	method, _ := ctx.Value(authMethodContextKey).(string)
+	return method
+}
+
+func TokenIDFromContext(ctx context.Context) string {
+	tokenID, _ := ctx.Value(tokenIDContextKey).(string)
+	return tokenID
+}
+
+func TokenLabelFromContext(ctx context.Context) string {
+	tokenLabel, _ := ctx.Value(tokenLabelContextKey).(string)
+	return tokenLabel
+}
+
+func TokenScopesFromContext(ctx context.Context) []string {
+	scopes, _ := ctx.Value(tokenScopesContextKey).([]string)
+	return append([]string(nil), scopes...)
+}
+
 // SubjectFromClaims returns a stable user identifier from claims.
 func SubjectFromClaims(claims map[string]interface{}) string {
 	if claims == nil {
@@ -344,6 +409,49 @@ func (a *Authenticator) sessionClaimsFromRequest(r *http.Request) (map[string]in
 		return nil, errors.New("session expired")
 	}
 	return payload.Claims, nil
+}
+
+func (a *Authenticator) authenticateRequest(r *http.Request, policy AuthPolicy) (map[string]interface{}, string, string, string, []string, error) {
+	if policy.AllowBearer {
+		if tokenValue, ok := bearerTokenFromRequest(r); ok {
+			record, err := a.authenticateBearerToken(r.Context(), tokenValue)
+			if err != nil {
+				return nil, "", "", "", nil, err
+			}
+			if !a.tokenService.HasScopes(record, policy.RequiredTokenScopes...) {
+				return nil, "", "", "", nil, ErrAPITokenScopeDenied
+			}
+			return record.Claims, AuthMethodToken, record.ID, record.Label, append([]string(nil), record.Scopes...), nil
+		}
+	}
+	claims, err := a.sessionClaimsFromRequest(r)
+	if err != nil {
+		return nil, "", "", "", nil, err
+	}
+	return claims, AuthMethodSession, "", "", nil, nil
+}
+
+func (a *Authenticator) authenticateBearerToken(ctx context.Context, tokenValue string) (*APITokenRecord, error) {
+	if a == nil || a.tokenService == nil || !a.tokenService.Enabled() {
+		return nil, ErrAPITokenNotFound
+	}
+	return a.tokenService.Authenticate(ctx, tokenValue)
+}
+
+func bearerTokenFromRequest(r *http.Request) (string, bool) {
+	value := strings.TrimSpace(r.Header.Get("Authorization"))
+	if value == "" {
+		return "", false
+	}
+	parts := strings.SplitN(value, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", false
+	}
+	token := strings.TrimSpace(parts[1])
+	if token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 func (a *Authenticator) signSession(payload SessionClaims) (string, error) {

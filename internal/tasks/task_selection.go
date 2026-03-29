@@ -108,17 +108,45 @@ func ResolveTaskSelection(catalog *TaskDefinitionCatalog, label string, options 
 }
 
 func ResolveTaskSelectionLabels(catalog *TaskDefinitionCatalog, label string, options ResolveOptions) ([]string, error) {
-	resolvedCatalog, err := ResolveTaskSelection(catalog, label, options)
-	if err != nil {
-		return nil, err
-	}
-	if resolvedCatalog == nil || len(resolvedCatalog.Tasks) == 0 {
+	selection := catalog.LookupTask(label)
+	if selection.Label == "" {
 		return nil, nil
 	}
 
-	labels := make([]string, 0, len(resolvedCatalog.Tasks))
-	for taskLabel := range resolvedCatalog.Tasks {
-		labels = append(labels, taskLabel)
+	_ = options
+	resolved := make(map[string]bool)
+	visiting := make(map[string]bool)
+	labels := make([]string, 0)
+
+	var visit func(string) error
+	visit = func(name string) error {
+		if resolved[name] {
+			return nil
+		}
+		if visiting[name] {
+			return nil
+		}
+		task, ok := catalog.Tasks[name]
+		if !ok {
+			return nil
+		}
+		visiting[name] = true
+		for _, dep := range task.Dependencies.Labels() {
+			if _, ok := catalog.Tasks[dep]; !ok {
+				return fmt.Errorf("task %s depends on unknown task %s", task.Label, dep)
+			}
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		delete(visiting, name)
+		resolved[name] = true
+		labels = append(labels, name)
+		return nil
+	}
+
+	if err := visit(selection.Label); err != nil {
+		return nil, err
 	}
 	sort.Strings(labels)
 	return labels, nil

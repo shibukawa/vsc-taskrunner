@@ -294,6 +294,9 @@ const summaryRows = computed<SummaryRow[]>(() => {
     { label: 'Duration', value: formatDurationMilliseconds(timelineWindow.value.duration) },
     { label: 'Exit Code', value: String(props.currentRun.exitCode) },
   ]
+  if (props.currentRun.tokenLabel) {
+    rows.splice(1, 0, { label: 'API Token', value: props.currentRun.tokenLabel })
+  }
   if (props.currentRun.commitHash) {
     rows.push({
       label: 'Git Hash',

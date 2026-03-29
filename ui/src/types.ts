@@ -97,6 +97,7 @@ export type RunMeta = {
   exitCode: number
   commitHash?: string
   user?: string
+  tokenLabel?: string
   inputValues?: Record<string, string>
   tasks?: TaskRun[]
   hasArtifacts?: boolean
@@ -114,6 +115,7 @@ export type RunStartResponse = {
   endTime?: string
   exitCode: number
   user?: string
+  tokenLabel?: string
   inputValues?: Record<string, string>
   tasks?: TaskRun[]
 }
@@ -124,6 +126,23 @@ export type MeResponse = {
   claims?: Record<string, string>
   canRun?: boolean
   isAdmin?: boolean
+  canManageTokens?: boolean
+  apiTokensEnabled?: boolean
+}
+
+export type APITokenItem = {
+  id: string
+  label: string
+  scopes: string[]
+  createdAt: string
+  lastUsedAt?: string
+  expiresAt: string
+  revokedAt?: string
+}
+
+export type APITokenCreateResponse = {
+  token: string
+  item: APITokenItem
 }
 
 export type RouteState = {

@@ -87,6 +87,15 @@ func (a *App) runUI(args []string) int {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
+	if cfg.Auth.APITokens.Enabled {
+		tokenService, storeKind, err := newAPITokenServiceWithKind(context.Background(), historyDir, cfg)
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		authenticator.SetTokenService(tokenService)
+		log.Printf("runtask startup api token store=%q", storeKind)
+	}
 	server := web.NewServer(store, cfg, manager, authenticator)
 	go func() {
 		if err := server.WarmBranchMetadata(context.Background()); err != nil {
@@ -226,6 +235,34 @@ func openURL(rawURL string) {
 func newHistoryStore(ctx context.Context, historyDir string, cfg *uiconfig.UIConfig) (*web.HistoryStore, error) {
 	history, _, _, err := newHistoryStoreWithKinds(ctx, historyDir, cfg)
 	return history, err
+}
+
+func newAPITokenServiceWithKind(ctx context.Context, historyDir string, cfg *uiconfig.UIConfig) (*web.APITokenService, string, error) {
+	switch cfg.Auth.APITokens.Store.Backend {
+	case "", "local":
+		path := cfg.Auth.APITokens.Store.LocalPath
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(filepath.Dir(historyDir)), path)
+		}
+		store := web.NewLocalAPITokenStore(path)
+		return web.NewAPITokenService(cfg.Auth.APITokens, store), "*web.LocalAPITokenStore", nil
+	case "object":
+		store, err := web.NewObjectAPITokenStore(ctx, web.ObjectIndexStoreOptions{
+			Endpoint:       cfg.Auth.APITokens.Store.Object.Endpoint,
+			Bucket:         cfg.Auth.APITokens.Store.Object.Bucket,
+			Region:         cfg.Auth.APITokens.Store.Object.Region,
+			AccessKey:      cfg.Auth.APITokens.Store.Object.AccessKey,
+			SecretKey:      cfg.Auth.APITokens.Store.Object.SecretKey,
+			Prefix:         cfg.Auth.APITokens.Store.Object.Prefix,
+			ForcePathStyle: cfg.Auth.APITokens.Store.Object.ForcePathStyle,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return web.NewAPITokenService(cfg.Auth.APITokens, store), "*web.ObjectAPITokenStore", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported api token storage backend %q", cfg.Auth.APITokens.Store.Backend)
+	}
 }
 
 func newHistoryStoreWithKinds(ctx context.Context, historyDir string, cfg *uiconfig.UIConfig) (*web.HistoryStore, string, string, error) {

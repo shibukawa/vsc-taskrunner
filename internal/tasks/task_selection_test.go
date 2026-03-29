@@ -69,11 +69,11 @@ func TestResolveTaskSelectionSkipsInputsOutsideSelectedGraph(t *testing.T) {
 	}
 
 	catalog, err := ResolveTaskSelection(BuildTaskDefinitionCatalog(file, "/tmp/demo", "/tmp/demo/.vscode/tasks.json"), "build", ResolveOptions{
-		WorkspaceRoot: "/tmp/demo",
-		TaskFilePath:  "/tmp/demo/.vscode/tasks.json",
-		Inputs:        file.Inputs,
-		Stdin:         strings.NewReader(""),
-		Stdout:        io.Discard,
+		WorkspaceRoot:  "/tmp/demo",
+		TaskFilePath:   "/tmp/demo/.vscode/tasks.json",
+		Inputs:         file.Inputs,
+		Stdin:          strings.NewReader(""),
+		Stdout:         io.Discard,
 		NonInteractive: true,
 	})
 	if err != nil {
@@ -215,16 +215,50 @@ func TestResolveTaskSelectionLabelsReturnsSortedSelectedGraph(t *testing.T) {
 	}
 
 	labels, err := ResolveTaskSelectionLabels(BuildTaskDefinitionCatalog(file, "/tmp/demo", "/tmp/demo/.vscode/tasks.json"), "build", ResolveOptions{
-		WorkspaceRoot: "/tmp/demo",
-		TaskFilePath:  "/tmp/demo/.vscode/tasks.json",
-		Stdin:         strings.NewReader(""),
-		Stdout:        io.Discard,
+		WorkspaceRoot:  "/tmp/demo",
+		TaskFilePath:   "/tmp/demo/.vscode/tasks.json",
+		Stdin:          strings.NewReader(""),
+		Stdout:         io.Discard,
 		NonInteractive: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.Join(labels, ","), "build,lint,prepare"; got != want {
+		t.Fatalf("labels = %q, want %q", got, want)
+	}
+}
+
+func TestResolveTaskSelectionLabelsSkipsInputResolution(t *testing.T) {
+	t.Parallel()
+
+	file := &File{
+		Version: "2.0.0",
+		Inputs: []Input{
+			{ID: "demoMessage", Type: "promptString", Description: "message"},
+		},
+		Tasks: []Task{
+			{
+				Label:   "show-input",
+				Type:    "process",
+				Command: TokenValue{Value: "echo", Set: true},
+				Args:    []TokenValue{{Value: "${input:demoMessage}", Set: true}},
+			},
+		},
+	}
+
+	labels, err := ResolveTaskSelectionLabels(BuildTaskDefinitionCatalog(file, "/tmp/demo", "/tmp/demo/.vscode/tasks.json"), "show-input", ResolveOptions{
+		WorkspaceRoot:  "/tmp/demo",
+		TaskFilePath:   "/tmp/demo/.vscode/tasks.json",
+		Inputs:         file.Inputs,
+		NonInteractive: true,
+		Stdin:          strings.NewReader(""),
+		Stdout:         io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(labels, ","), "show-input"; got != want {
 		t.Fatalf("labels = %q, want %q", got, want)
 	}
 }
@@ -240,10 +274,10 @@ func TestResolveTaskSelectionLabelsSkipsUnknownRootTask(t *testing.T) {
 	}
 
 	labels, err := ResolveTaskSelectionLabels(BuildTaskDefinitionCatalog(file, "/tmp/demo", "/tmp/demo/.vscode/tasks.json"), "missing", ResolveOptions{
-		WorkspaceRoot: "/tmp/demo",
-		TaskFilePath:  "/tmp/demo/.vscode/tasks.json",
-		Stdin:         strings.NewReader(""),
-		Stdout:        io.Discard,
+		WorkspaceRoot:  "/tmp/demo",
+		TaskFilePath:   "/tmp/demo/.vscode/tasks.json",
+		Stdin:          strings.NewReader(""),
+		Stdout:         io.Discard,
 		NonInteractive: true,
 	})
 	if err != nil {

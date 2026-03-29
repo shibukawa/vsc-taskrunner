@@ -47,6 +47,7 @@ type RunMeta struct {
 	WorktreeKept bool              `yaml:"worktreeKept" json:"worktreeKept"`
 	Artifacts    []ArtifactRef     `yaml:"artifacts" json:"artifacts,omitempty"`
 	User         string            `yaml:"user,omitempty" json:"user,omitempty"`
+	TokenLabel   string            `yaml:"tokenLabel,omitempty" json:"tokenLabel,omitempty"`
 	InputValues  map[string]string `yaml:"-" json:"-"`
 	Tasks        []*TaskRunMeta    `yaml:"tasks,omitempty" json:"tasks,omitempty"`
 }
@@ -128,26 +129,27 @@ func NewHistoryStoreWithStores(historyDir string, indexStore HistoryIndexStore, 
 }
 
 func (s *HistoryStore) AllocateRun(branch, taskLabel string) (*RunMeta, error) {
-	return s.AllocateRunWithUser(branch, taskLabel, "")
+	return s.AllocateRunWithUser(branch, taskLabel, "", "")
 }
 
-func (s *HistoryStore) AllocateRunWithUser(branch, taskLabel, user string) (*RunMeta, error) {
+func (s *HistoryStore) AllocateRunWithUser(branch, taskLabel, user, tokenLabel string) (*RunMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var meta *RunMeta
 	if err := s.index.UpdateIndex(context.Background(), func(index *RunHistoryIndex) error {
 		runID := uuid.NewString()
-		summary := index.startRun(branch, taskLabel, user, runID)
+		summary := index.startRun(branch, taskLabel, user, tokenLabel, runID)
 		meta = &RunMeta{
-			RunID:     runID,
-			RunKey:    runID,
-			Branch:    branch,
-			TaskLabel: taskLabel,
-			RunNumber: summary.RunNumber,
-			Status:    RunStatusRunning,
-			StartTime: summary.StartTime,
-			User:      user,
+			RunID:      runID,
+			RunKey:     runID,
+			Branch:     branch,
+			TaskLabel:  taskLabel,
+			RunNumber:  summary.RunNumber,
+			Status:     RunStatusRunning,
+			StartTime:  summary.StartTime,
+			User:       user,
+			TokenLabel: tokenLabel,
 		}
 		return nil
 	}); err != nil {
@@ -361,6 +363,7 @@ func (s *HistoryStore) rebuildHistoryIndex() ([]*RunMeta, error) {
 				EndTime:      meta.EndTime,
 				ExitCode:     meta.ExitCode,
 				User:         meta.User,
+				TokenLabel:   meta.TokenLabel,
 				HasArtifacts: len(meta.Artifacts) > 0,
 			})
 			if group.NextRunNumber <= meta.RunNumber {
@@ -392,6 +395,7 @@ func (s *HistoryStore) rebuildHistoryIndex() ([]*RunMeta, error) {
 			EndTime:      meta.EndTime,
 			ExitCode:     meta.ExitCode,
 			User:         meta.User,
+			TokenLabel:   meta.TokenLabel,
 			HasArtifacts: len(meta.Artifacts) > 0,
 		})
 	}

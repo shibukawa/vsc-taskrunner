@@ -21,6 +21,7 @@ type RunHistorySummary struct {
 	EndTime      time.Time `json:"endTime,omitempty"`
 	ExitCode     int       `json:"exitCode"`
 	User         string    `json:"user,omitempty"`
+	TokenLabel   string    `json:"tokenLabel,omitempty"`
 	HasArtifacts bool      `json:"hasArtifacts,omitempty"`
 }
 
@@ -60,7 +61,7 @@ func (idx *RunHistoryIndex) ensureGroup(branch, taskLabel string) *RunHistoryGro
 	return group
 }
 
-func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, runID string) *RunHistorySummary {
+func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, tokenLabel, runID string) *RunHistorySummary {
 	group := idx.ensureGroup(branch, taskLabel)
 	runNumber := group.NextRunNumber
 	if runNumber < 1 {
@@ -69,14 +70,15 @@ func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, runID string) *Run
 	group.NextRunNumber = runNumber + 1
 
 	summary := &RunHistorySummary{
-		RunID:     runID,
-		RunKey:    RunRef{Branch: branch, TaskLabel: taskLabel, RunNumber: runNumber}.Key(),
-		Branch:    branch,
-		TaskLabel: taskLabel,
-		RunNumber: runNumber,
-		Status:    RunStatusRunning,
-		StartTime: time.Now().UTC(),
-		User:      user,
+		RunID:      runID,
+		RunKey:     RunRef{Branch: branch, TaskLabel: taskLabel, RunNumber: runNumber}.Key(),
+		Branch:     branch,
+		TaskLabel:  taskLabel,
+		RunNumber:  runNumber,
+		Status:     RunStatusRunning,
+		StartTime:  time.Now().UTC(),
+		User:       user,
+		TokenLabel: tokenLabel,
 	}
 	group.Runs = append([]*RunHistorySummary{summary}, group.Runs...)
 	return summary
@@ -94,6 +96,7 @@ func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
 		run.EndTime = meta.EndTime
 		run.ExitCode = meta.ExitCode
 		run.User = meta.User
+		run.TokenLabel = meta.TokenLabel
 		run.HasArtifacts = len(meta.Artifacts) > 0
 		run.RunKey = meta.RunKey
 		return trimCompletedHistoryGroup(group, keepCount)
@@ -110,6 +113,7 @@ func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
 		EndTime:      meta.EndTime,
 		ExitCode:     meta.ExitCode,
 		User:         meta.User,
+		TokenLabel:   meta.TokenLabel,
 		HasArtifacts: len(meta.Artifacts) > 0,
 	}}, group.Runs...)
 	return trimCompletedHistoryGroup(group, keepCount)
@@ -148,6 +152,7 @@ func (idx *RunHistoryIndex) listRuns() []*RunMeta {
 				EndTime:      run.EndTime,
 				ExitCode:     run.ExitCode,
 				User:         run.User,
+				TokenLabel:   run.TokenLabel,
 				HasArtifacts: run.HasArtifacts,
 			})
 		}

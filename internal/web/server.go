@@ -127,18 +127,41 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleStatic)
 
 	if s.auth != nil && s.auth.Enabled() {
+		sessionOnly := s.auth.RequireAuth
+		apiRead := func(next http.HandlerFunc) http.HandlerFunc {
+			return s.auth.RequireAuthWithPolicy(AuthPolicy{
+				AllowBearer:         true,
+				RequiredTokenScopes: []string{APITokenScopeRunsRead},
+			}, next)
+		}
+		apiAny := func(next http.HandlerFunc) http.HandlerFunc {
+			return s.auth.RequireAuthWithPolicy(AuthPolicy{
+				AllowBearer: true,
+			}, next)
+		}
+		apiWrite := func(next http.HandlerFunc) http.HandlerFunc {
+			return s.auth.RequireAuthWithPolicy(AuthPolicy{
+				AllowBearer:         true,
+				RequiredTokenScopes: []string{APITokenScopeRunsWrite},
+			}, next)
+		}
 		s.mux.HandleFunc("/auth/login", s.auth.HandleLogin)
 		s.mux.HandleFunc("/auth/callback", s.auth.HandleCallback)
 		s.mux.HandleFunc("/auth/logout", s.auth.HandleLogout)
-		s.mux.HandleFunc("GET /api/me", s.auth.RequireAuth(s.handleMe))
-		s.mux.HandleFunc("GET /api/git/branches", s.auth.RequireAuth(s.handleBranches))
-		s.mux.HandleFunc("POST /api/git/fetch", s.auth.RequireAuth(s.handleFetch))
-		s.mux.HandleFunc("GET /api/git/branches/{branch}/tasks", s.auth.RequireAuth(s.handleBranchTasks))
-		s.mux.HandleFunc("GET /api/runs", s.auth.RequireAuth(s.handleRuns))
-		s.mux.HandleFunc("POST /api/runs", s.auth.RequireAuth(s.handleRuns))
-		s.mux.HandleFunc("GET /api/metrics/stream", s.auth.RequireAuth(s.handleMetricsStream))
-		s.mux.HandleFunc("POST /api/cleanup", s.auth.RequireAuth(s.handleCleanup))
-		s.registerRunRoutes(s.auth.RequireAuth)
+		s.mux.HandleFunc("GET /api/me", apiAny(s.handleMe))
+		s.mux.HandleFunc("GET /api/git/branches", sessionOnly(s.handleBranches))
+		s.mux.HandleFunc("POST /api/git/fetch", sessionOnly(s.handleFetch))
+		s.mux.HandleFunc("GET /api/git/branches/{branch}/tasks", sessionOnly(s.handleBranchTasks))
+		s.mux.HandleFunc("GET /api/runs", apiRead(s.handleRuns))
+		s.mux.HandleFunc("POST /api/runs", apiWrite(s.handleRuns))
+		s.mux.HandleFunc("GET /api/metrics/stream", sessionOnly(s.handleMetricsStream))
+		s.mux.HandleFunc("POST /api/cleanup", sessionOnly(s.handleCleanup))
+		s.registerRunRoutes(apiRead)
+		if s.auth.TokenService() != nil && s.auth.TokenService().Enabled() {
+			s.mux.HandleFunc("GET /api/tokens", sessionOnly(s.handleAPITokens))
+			s.mux.HandleFunc("POST /api/tokens", sessionOnly(s.handleAPITokens))
+			s.mux.HandleFunc("POST /api/tokens/{tokenId}/revoke", sessionOnly(s.handleRevokeAPIToken))
+		}
 		return
 	}
 
@@ -186,19 +209,23 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	claims := ClaimsFromContext(r.Context())
 	if claims == nil {
 		s.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"authenticated": false,
-			"claims":        map[string]string{},
-			"canRun":        true,
-			"isAdmin":       false,
+			"authenticated":    false,
+			"claims":           map[string]string{},
+			"canRun":           true,
+			"isAdmin":          false,
+			"canManageTokens":  false,
+			"apiTokensEnabled": false,
 		})
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"authenticated": true,
-		"subject":       SubjectFromClaims(claims),
-		"claims":        ClaimsAsJSON(claims),
-		"canRun":        s.config.CanRun(claims),
-		"isAdmin":       s.config.IsAdminUser(claims),
+		"authenticated":    true,
+		"subject":          SubjectFromClaims(claims),
+		"claims":           ClaimsAsJSON(claims),
+		"canRun":           s.config.CanRun(claims),
+		"isAdmin":          s.config.IsAdminUser(claims),
+		"canManageTokens":  AuthMethodFromContext(r.Context()) == AuthMethodSession && s.config.CanManageTokens(claims) && s.auth != nil && s.auth.TokenService() != nil && s.auth.TokenService().Enabled(),
+		"apiTokensEnabled": s.auth != nil && s.auth.TokenService() != nil && s.auth.TokenService().Enabled(),
 	})
 }
 
@@ -580,24 +607,29 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		if req.User == "" {
 			req.User = "anonymous"
 		}
+		tokenLabel := ""
+		if AuthMethodFromContext(r.Context()) == AuthMethodToken {
+			tokenLabel = TokenLabelFromContext(r.Context())
+		}
 
-		meta, err := s.manager.StartRunWithInputs(r.Context(), req.Branch, req.TaskLabel, req.User, req.InputValues)
+		meta, err := s.manager.StartRunWithInputs(r.Context(), req.Branch, req.TaskLabel, req.User, tokenLabel, req.InputValues)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		type runStartResponse struct {
-			RunID     string         `json:"runId"`
-			RunKey    string         `json:"runKey"`
-			Branch    string         `json:"branch"`
-			TaskLabel string         `json:"taskLabel"`
-			RunNumber int            `json:"runNumber"`
-			Status    RunStatus      `json:"status"`
-			StartTime time.Time      `json:"startTime"`
-			EndTime   *time.Time     `json:"endTime,omitempty"`
-			ExitCode  int            `json:"exitCode"`
-			User      string         `json:"user,omitempty"`
-			Tasks     []*TaskRunMeta `json:"tasks,omitempty"`
+			RunID      string         `json:"runId"`
+			RunKey     string         `json:"runKey"`
+			Branch     string         `json:"branch"`
+			TaskLabel  string         `json:"taskLabel"`
+			RunNumber  int            `json:"runNumber"`
+			Status     RunStatus      `json:"status"`
+			StartTime  time.Time      `json:"startTime"`
+			EndTime    *time.Time     `json:"endTime,omitempty"`
+			ExitCode   int            `json:"exitCode"`
+			User       string         `json:"user,omitempty"`
+			TokenLabel string         `json:"tokenLabel,omitempty"`
+			Tasks      []*TaskRunMeta `json:"tasks,omitempty"`
 		}
 		var endTime *time.Time
 		if !meta.EndTime.IsZero() {
@@ -605,17 +637,18 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			endTime = &value
 		}
 		s.writeJSON(w, http.StatusAccepted, runStartResponse{
-			RunID:     meta.RunID,
-			RunKey:    meta.RunKey,
-			Branch:    meta.Branch,
-			TaskLabel: meta.TaskLabel,
-			RunNumber: meta.RunNumber,
-			Status:    meta.Status,
-			StartTime: meta.StartTime,
-			EndTime:   endTime,
-			ExitCode:  meta.ExitCode,
-			User:      meta.User,
-			Tasks:     meta.Tasks,
+			RunID:      meta.RunID,
+			RunKey:     meta.RunKey,
+			Branch:     meta.Branch,
+			TaskLabel:  meta.TaskLabel,
+			RunNumber:  meta.RunNumber,
+			Status:     meta.Status,
+			StartTime:  meta.StartTime,
+			EndTime:    endTime,
+			ExitCode:   meta.ExitCode,
+			User:       meta.User,
+			TokenLabel: meta.TokenLabel,
+			Tasks:      meta.Tasks,
 		})
 	default:
 		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")

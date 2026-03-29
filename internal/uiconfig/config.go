@@ -12,13 +12,16 @@ import (
 )
 
 const (
-	DefaultFetchDepth        = 1
-	DefaultTasksSparsePath   = ".vscode"
-	DefaultArtifactArchive   = "artifacts.zip"
-	DefaultHistoryDir        = ".runtask/history"
-	DefaultHistoryKeepCount  = 100
-	DefaultWorktreeKeepOK    = 0
-	DefaultWorktreeKeepError = 3
+	DefaultFetchDepth         = 1
+	DefaultTasksSparsePath    = ".vscode"
+	DefaultArtifactArchive    = "artifacts.zip"
+	DefaultHistoryDir         = ".runtask/history"
+	DefaultHistoryKeepCount   = 100
+	DefaultWorktreeKeepOK     = 0
+	DefaultWorktreeKeepError  = 3
+	DefaultAPITokenTTLHours   = 24 * 30
+	DefaultAPITokenMaxPerUser = 10
+	DefaultAPITokenLocalPath  = ".runtask/api-tokens.json"
 )
 
 type UIConfig struct {
@@ -56,6 +59,20 @@ type AuthConfig struct {
 	SessionSecret    string          `yaml:"sessionSecret"`
 	AllowUsers       UserAccessRules `yaml:"allowUsers"`
 	AdminUsers       UserAccessRules `yaml:"adminUsers"`
+	APITokens        APITokenConfig  `yaml:"apiTokens"`
+}
+
+type APITokenConfig struct {
+	Enabled         bool                `yaml:"enabled"`
+	DefaultTTLHours int                 `yaml:"defaultTTLHours"`
+	MaxPerUser      int                 `yaml:"maxPerUser"`
+	Store           APITokenStoreConfig `yaml:"store"`
+}
+
+type APITokenStoreConfig struct {
+	Backend   string              `yaml:"backend"`
+	LocalPath string              `yaml:"localPath"`
+	Object    ObjectStorageConfig `yaml:"object"`
 }
 
 type RepositoryConfig struct {
@@ -257,6 +274,16 @@ func DefaultConfig() *UIConfig {
 				RequireReadOnly:  true,
 			},
 		},
+		Auth: AuthConfig{
+			APITokens: APITokenConfig{
+				DefaultTTLHours: DefaultAPITokenTTLHours,
+				MaxPerUser:      DefaultAPITokenMaxPerUser,
+				Store: APITokenStoreConfig{
+					Backend:   "local",
+					LocalPath: DefaultAPITokenLocalPath,
+				},
+			},
+		},
 	}
 }
 
@@ -307,6 +334,9 @@ func (c *UIConfig) Validate() error {
 	if err := validateUserAccessRules(c.Auth.AdminUsers, "auth.adminUsers"); err != nil {
 		return err
 	}
+	if err := c.Auth.APITokens.Validate(c.Auth.NoAuth); err != nil {
+		return err
+	}
 	if c.Execution.MaxParallelRuns < 0 {
 		return fmt.Errorf("execution.maxParallelRuns must be >= 0")
 	}
@@ -328,14 +358,11 @@ func (c *UIConfig) Validate() error {
 			c.Storage.Backend = "local"
 		}
 	case "object":
-		if strings.TrimSpace(c.Storage.Object.Endpoint) == "" {
-			return fmt.Errorf("storage.object.endpoint is required when storage.backend=object")
-		}
-		if strings.TrimSpace(c.Storage.Object.Bucket) == "" {
-			return fmt.Errorf("storage.object.bucket is required when storage.backend=object")
-		}
 		if strings.TrimSpace(c.Storage.Object.Region) == "" {
 			c.Storage.Object.Region = "us-east-1"
+		}
+		if err := validateObjectStorageConfig(c.Storage.Object, "storage.object"); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("storage.backend must be one of local or object, got %q", c.Storage.Backend)
@@ -362,6 +389,43 @@ func (c *UIConfig) Validate() error {
 		if err := validateTaskUIConfig(spec.Config, fmt.Sprintf("tasks[%q]", spec.Pattern)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *APITokenConfig) Validate(noAuth bool) error {
+	if c.DefaultTTLHours <= 0 {
+		c.DefaultTTLHours = DefaultAPITokenTTLHours
+	}
+	if c.MaxPerUser <= 0 {
+		c.MaxPerUser = DefaultAPITokenMaxPerUser
+	}
+	if strings.TrimSpace(c.Store.Backend) == "" {
+		c.Store.Backend = "local"
+	}
+	if strings.TrimSpace(c.Store.LocalPath) == "" {
+		c.Store.LocalPath = DefaultAPITokenLocalPath
+	}
+	if !c.Enabled {
+		return nil
+	}
+	if noAuth {
+		return fmt.Errorf("auth.apiTokens.enabled requires auth.noAuth=false")
+	}
+	switch c.Store.Backend {
+	case "", "local":
+		if strings.TrimSpace(c.Store.LocalPath) == "" {
+			return fmt.Errorf("auth.apiTokens.store.localPath is required when auth.apiTokens.store.backend=local")
+		}
+	case "object":
+		if strings.TrimSpace(c.Store.Object.Region) == "" {
+			c.Store.Object.Region = "us-east-1"
+		}
+		if err := validateObjectStorageConfig(c.Store.Object, "auth.apiTokens.store.object"); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("auth.apiTokens.store.backend must be one of local or object, got %q", c.Store.Backend)
 	}
 	return nil
 }
@@ -398,6 +462,16 @@ func validatePreRunTaskConfig(hook PreRunTaskConfig, prefix string) error {
 	}
 	if hook.Shell != nil && strings.TrimSpace(hook.Shell.Executable) == "" {
 		return fmt.Errorf("%s.shell.executable is required when shell is set", prefix)
+	}
+	return nil
+}
+
+func validateObjectStorageConfig(cfg ObjectStorageConfig, prefix string) error {
+	if strings.TrimSpace(cfg.Endpoint) == "" {
+		return fmt.Errorf("%s.endpoint is required", prefix)
+	}
+	if strings.TrimSpace(cfg.Bucket) == "" {
+		return fmt.Errorf("%s.bucket is required", prefix)
 	}
 	return nil
 }
@@ -544,6 +618,10 @@ func (c *UIConfig) MatchUser(claims map[string]interface{}) bool {
 
 func (c *UIConfig) IsAdminUser(claims map[string]interface{}) bool {
 	return c.matchUserRules(c.Auth.AdminUsers, claims, false)
+}
+
+func (c *UIConfig) CanManageTokens(claims map[string]interface{}) bool {
+	return c.IsAdminUser(claims)
 }
 
 func (c *UIConfig) CanRun(claims map[string]interface{}) bool {

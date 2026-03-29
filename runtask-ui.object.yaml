@@ -25,14 +25,28 @@ auth:
   oidcClientSecret: secret
   noAuth: false
   sessionSecret: change-this-for-shared-dev
-  # default: [] (empty means any authenticated user is allowed)
-  allowUsers:
-    role:
-      - runner
-  # default: [] (empty means no admin users)
+  # default: {} (empty means any authenticated user is allowed)
+  allowUsers: {}
+  # default: {} (empty means no admin users)
   adminUsers:
     role:
-      - administrator
+      - admin
+  apiTokens:
+    enabled: true
+    # default: 720
+    defaultTTLHours: 720
+    # default: 10
+    maxPerUser: 10
+    store:
+      backend: object
+      object:
+        endpoint: http://127.0.0.1:9000
+        bucket: runtask-tokens
+        region: us-east-1
+        accessKey: minioadmin
+        secretKey: minioadmin
+        prefix: runtask/demo
+        forcePathStyle: true
 
 # default: top-level branches only when omitted
 branches:

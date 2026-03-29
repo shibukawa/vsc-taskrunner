@@ -294,7 +294,7 @@ button:disabled {
 .run-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 60;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -309,6 +309,12 @@ button:disabled {
   padding: 18px;
   display: grid;
   gap: 16px;
+}
+
+.token-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .run-dialog-fields {
@@ -338,6 +344,93 @@ button:disabled {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.token-scope-row {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.token-scope-row input {
+  width: auto;
+}
+
+.token-created-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.token-created-row,
+.token-example-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.token-created-value {
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.token-helper-text {
+  margin: 0;
+}
+
+.token-example-list {
+  display: grid;
+  gap: 10px;
+}
+
+.token-example-card {
+  display: grid;
+  gap: 8px;
+}
+
+.token-endpoint-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.3fr) minmax(120px, 1fr) minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.token-endpoint-url {
+  min-width: 0;
+}
+
+.token-endpoint-select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.38);
+  color: var(--ink);
+  padding: 0.78rem 0.92rem;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.token-list {
+  display: grid;
+  gap: 12px;
+}
+
+.token-error {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .token-created-row,
+  .token-example-copy {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .token-endpoint-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .branch-list,
