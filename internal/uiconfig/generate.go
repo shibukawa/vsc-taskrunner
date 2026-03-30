@@ -283,14 +283,14 @@ func buildRepositoryAuthView(cfg RepositoryAuthConfig, defaults RepositoryAuthCo
 		return nil
 	}
 	view := &repositoryAuthView{
-		Type:            cfg.Type,
-		Provider:        cfg.Provider,
-		TokenEnv:        cfg.TokenEnv,
-		BaseURL:         cfg.BaseURL,
-		Repo:            cfg.Repo,
-		AllowedHosts:    append([]string(nil), cfg.AllowedHosts...),
+		Type:             cfg.Type,
+		Provider:         cfg.Provider,
+		TokenEnv:         cfg.TokenEnv,
+		BaseURL:          cfg.BaseURL,
+		Repo:             cfg.Repo,
+		AllowedHosts:     append([]string(nil), cfg.AllowedHosts...),
 		RejectBroadScope: cfg.RejectBroadScope,
-		RequireReadOnly: cfg.RequireReadOnly,
+		RequireReadOnly:  cfg.RequireReadOnly,
 	}
 	return view
 }
@@ -358,15 +358,15 @@ func equalStrings(left []string, right []string) bool {
 }
 
 type configView struct {
-	Server     serverView      `yaml:"server"`
-	Repository repositoryView  `yaml:"repository"`
-	Auth       *authView       `yaml:"auth,omitempty"`
-	Branches   []string        `yaml:"branches,omitempty"`
+	Server     serverView       `yaml:"server"`
+	Repository repositoryView   `yaml:"repository"`
+	Auth       *authView        `yaml:"auth,omitempty"`
+	Branches   []string         `yaml:"branches,omitempty"`
 	Tasks      AllowedTaskSpecs `yaml:"tasks,omitempty"`
-	Execution  executionView   `yaml:"execution"`
-	Metrics    metricsView     `yaml:"metrics"`
-	Logging    *loggingView    `yaml:"logging,omitempty"`
-	Storage    storageView     `yaml:"storage"`
+	Execution  executionView    `yaml:"execution"`
+	Metrics    metricsView      `yaml:"metrics"`
+	Logging    *loggingView     `yaml:"logging,omitempty"`
+	Storage    storageView      `yaml:"storage"`
 }
 
 type serverView struct {

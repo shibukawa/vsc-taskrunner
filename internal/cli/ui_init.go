@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
 	gitutil "vsc-taskrunner/internal/git"
 	"vsc-taskrunner/internal/tasks"
 	"vsc-taskrunner/internal/uiconfig"
-	"golang.org/x/term"
 )
 
 func (a *App) runUIInit(args []string) int {
