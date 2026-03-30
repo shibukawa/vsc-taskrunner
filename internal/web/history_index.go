@@ -20,6 +20,7 @@ type RunHistorySummary struct {
 	StartTime    time.Time `json:"startTime"`
 	EndTime      time.Time `json:"endTime,omitempty"`
 	ExitCode     int       `json:"exitCode"`
+	WorktreeKept bool      `json:"worktreeKept"`
 	User         string    `json:"user,omitempty"`
 	TokenLabel   string    `json:"tokenLabel,omitempty"`
 	HasArtifacts bool      `json:"hasArtifacts,omitempty"`
@@ -70,15 +71,16 @@ func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, tokenLabel, runID 
 	group.NextRunNumber = runNumber + 1
 
 	summary := &RunHistorySummary{
-		RunID:      runID,
-		RunKey:     RunRef{Branch: branch, TaskLabel: taskLabel, RunNumber: runNumber}.Key(),
-		Branch:     branch,
-		TaskLabel:  taskLabel,
-		RunNumber:  runNumber,
-		Status:     RunStatusRunning,
-		StartTime:  time.Now().UTC(),
-		User:       user,
-		TokenLabel: tokenLabel,
+		RunID:        runID,
+		RunKey:       RunRef{Branch: branch, TaskLabel: taskLabel, RunNumber: runNumber}.Key(),
+		Branch:       branch,
+		TaskLabel:    taskLabel,
+		RunNumber:    runNumber,
+		Status:       RunStatusRunning,
+		StartTime:    time.Now().UTC(),
+		WorktreeKept: false,
+		User:         user,
+		TokenLabel:   tokenLabel,
 	}
 	group.Runs = append([]*RunHistorySummary{summary}, group.Runs...)
 	return summary
@@ -95,6 +97,7 @@ func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
 		run.StartTime = meta.StartTime
 		run.EndTime = meta.EndTime
 		run.ExitCode = meta.ExitCode
+		run.WorktreeKept = meta.WorktreeKept
 		run.User = meta.User
 		run.TokenLabel = meta.TokenLabel
 		run.HasArtifacts = len(meta.Artifacts) > 0
@@ -112,6 +115,7 @@ func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
 		StartTime:    meta.StartTime,
 		EndTime:      meta.EndTime,
 		ExitCode:     meta.ExitCode,
+		WorktreeKept: meta.WorktreeKept,
 		User:         meta.User,
 		TokenLabel:   meta.TokenLabel,
 		HasArtifacts: len(meta.Artifacts) > 0,
@@ -151,6 +155,7 @@ func (idx *RunHistoryIndex) listRuns() []*RunMeta {
 				StartTime:    run.StartTime,
 				EndTime:      run.EndTime,
 				ExitCode:     run.ExitCode,
+				WorktreeKept: run.WorktreeKept,
 				User:         run.User,
 				TokenLabel:   run.TokenLabel,
 				HasArtifacts: run.HasArtifacts,
@@ -200,6 +205,58 @@ func trimCompletedHistoryGroup(group *RunHistoryGroup, keepCount int) []string {
 	}
 	group.Runs = kept
 	return evicted
+}
+
+func (idx *RunHistoryIndex) applyWorktreeRetention(keepSuccess int, keepFailure int) {
+	if keepSuccess < 0 {
+		keepSuccess = 0
+	}
+	if keepFailure < 0 {
+		keepFailure = 0
+	}
+	runs := idx.sortedRuns()
+	keptSuccess := 0
+	keptFailure := 0
+	for _, run := range runs {
+		run.WorktreeKept = false
+		switch run.Status {
+		case RunStatusSuccess:
+			if keptSuccess < keepSuccess {
+				run.WorktreeKept = true
+				keptSuccess++
+			}
+		case RunStatusFailed:
+			if keptFailure < keepFailure {
+				run.WorktreeKept = true
+				keptFailure++
+			}
+		}
+	}
+}
+
+func (idx *RunHistoryIndex) worktreeKept(runID string) bool {
+	for _, group := range idx.Groups {
+		for _, run := range group.Runs {
+			if run.RunID == runID {
+				return run.WorktreeKept
+			}
+		}
+	}
+	return false
+}
+
+func (idx *RunHistoryIndex) sortedRuns() []*RunHistorySummary {
+	runs := make([]*RunHistorySummary, 0)
+	for _, group := range idx.Groups {
+		runs = append(runs, group.Runs...)
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].StartTime.Equal(runs[j].StartTime) {
+			return runs[i].RunKey > runs[j].RunKey
+		}
+		return runs[i].StartTime.After(runs[j].StartTime)
+	})
+	return runs
 }
 
 func historyGroupKey(branch, taskLabel string) string {

@@ -1,11 +1,13 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -791,6 +793,15 @@ func TestHandleRunDetailOmitsInputValues(t *testing.T) {
 
 func TestEphemeralEmulationResetsCacheAfterIdle(t *testing.T) {
 	t.Setenv("RUNTASK_EPHEMERAL_EMULATION_IDLE", "1m")
+	var logBuffer bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
 	cachePath := filepath.Join(t.TempDir(), "cache.git")
 	if err := os.MkdirAll(cachePath, 0o755); err != nil {
 		t.Fatal(err)
@@ -821,6 +832,9 @@ func TestEphemeralEmulationResetsCacheAfterIdle(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cachePath, "marker")); !os.IsNotExist(err) {
 		t.Fatalf("expected marker to be removed, got err=%v", err)
+	}
+	if !strings.Contains(logBuffer.String(), "runtask ephemeral emulation deleting repository cache=") {
+		t.Fatalf("expected deletion log, got %q", logBuffer.String())
 	}
 }
 

@@ -123,35 +123,16 @@ func (s *LocalRunStore) TailLog(runID string, byteOffset int64) ([]byte, error) 
 
 func (s *LocalRunStore) ListWorktreeFiles(runID string) ([]string, error) {
 	root := s.WorktreePath(runID)
-	if _, err := os.Stat(root); os.IsNotExist(err) {
-		return nil, fmt.Errorf("worktree not present for run %s", runID)
+	files, err := listVisibleWorktreeFiles(root)
+	if err != nil {
+		return nil, fmt.Errorf("list worktree files for run %s: %w", runID, err)
 	}
-	var files []string
-	err := filepath.WalkDir(root, func(currentPath string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if entry.IsDir() && entry.Name() == ".git" {
-			return filepath.SkipDir
-		}
-		if !entry.IsDir() {
-			rel, relErr := filepath.Rel(root, currentPath)
-			if relErr == nil {
-				files = append(files, filepath.ToSlash(rel))
-			}
-		}
-		return nil
-	})
-	return files, err
+	return files, nil
 }
 
 func (s *LocalRunStore) ReadWorktreeFile(runID, filePath string) ([]byte, error) {
 	root := s.WorktreePath(runID)
-	cleanPath, err := safePathWithinRoot(root, filePath)
-	if err != nil {
-		return nil, err
-	}
-	return os.ReadFile(cleanPath)
+	return readVisibleWorktreeFile(root, filePath)
 }
 
 func (s *LocalRunStore) ListArtifactFiles(runID string) ([]string, error) {
