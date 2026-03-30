@@ -272,6 +272,28 @@ func (s *HistoryStore) RecordRunCompletion(meta *RunMeta, keepCount int) error {
 	return nil
 }
 
+func (s *HistoryStore) PersistCompletedRun(meta *RunMeta, keepCount int, keepSuccess int, keepFailure int) error {
+	var evicted []string
+	if err := s.index.UpdateIndex(context.Background(), func(index *RunHistoryIndex) error {
+		evicted = index.updateRun(meta, keepCount)
+		index.applyWorktreeRetention(keepSuccess, keepFailure)
+		meta.WorktreeKept = index.worktreeKept(meta.RunID)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := s.runs.WriteMeta(meta); err != nil {
+		return err
+	}
+	for _, runID := range evicted {
+		if runID == "" || runID == meta.RunID {
+			continue
+		}
+		_ = s.runs.DeleteRun(runID)
+	}
+	return nil
+}
+
 func (s *HistoryStore) AbortRun(meta *RunMeta) error {
 	if meta == nil {
 		return nil
@@ -298,23 +320,26 @@ func (s *HistoryStore) PruneWorktrees(keepSuccess int, keepFailure int) error {
 	if err != nil {
 		return err
 	}
-	var successes []*RunMeta
-	var failures []*RunMeta
+	desired := desiredWorktreeRetention(metas, keepSuccess, keepFailure)
 	for _, meta := range metas {
+		if desired[meta.RunID] {
+			continue
+		}
+		if err := os.RemoveAll(s.WorktreePath(meta.RunID)); err != nil {
+			return err
+		}
 		if !meta.WorktreeKept {
 			continue
 		}
-		switch meta.Status {
-		case RunStatusSuccess:
-			successes = append(successes, meta)
-		case RunStatusFailed:
-			failures = append(failures, meta)
+		meta.WorktreeKept = false
+		if err := s.WriteMeta(meta); err != nil {
+			return err
+		}
+		if err := s.FinalizeRun(meta.RunID); err != nil {
+			return err
 		}
 	}
-	if err := s.pruneWorktreeGroup(successes, keepSuccess); err != nil {
-		return err
-	}
-	return s.pruneWorktreeGroup(failures, keepFailure)
+	return nil
 }
 
 func (s *HistoryStore) rebuildHistoryIndex() ([]*RunMeta, error) {
@@ -428,6 +453,40 @@ func (s *HistoryStore) pruneWorktreeGroup(metas []*RunMeta, keep int) error {
 		}
 	}
 	return nil
+}
+
+func desiredWorktreeRetention(metas []*RunMeta, keepSuccess int, keepFailure int) map[string]bool {
+	if keepSuccess < 0 {
+		keepSuccess = 0
+	}
+	if keepFailure < 0 {
+		keepFailure = 0
+	}
+	items := append([]*RunMeta(nil), metas...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].StartTime.Equal(items[j].StartTime) {
+			return items[i].RunKey > items[j].RunKey
+		}
+		return items[i].StartTime.After(items[j].StartTime)
+	})
+	desired := make(map[string]bool, len(items))
+	keptSuccess := 0
+	keptFailure := 0
+	for _, meta := range items {
+		switch meta.Status {
+		case RunStatusSuccess:
+			if keptSuccess < keepSuccess {
+				desired[meta.RunID] = true
+				keptSuccess++
+			}
+		case RunStatusFailed:
+			if keptFailure < keepFailure {
+				desired[meta.RunID] = true
+				keptFailure++
+			}
+		}
+	}
+	return desired
 }
 
 func parseRunMeta(data []byte, runID string) (*RunMeta, error) {

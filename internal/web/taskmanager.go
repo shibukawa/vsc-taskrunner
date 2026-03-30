@@ -215,10 +215,12 @@ func (tm *TaskManager) StartRun(ctx context.Context, branch, taskLabel, user str
 func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel, user, tokenLabel string, inputValues map[string]string) (*RunMeta, error) {
 	meta, err := tm.history.AllocateRunWithUser(branch, taskLabel, user, tokenLabel)
 	if err != nil {
+		tm.logRunStartFailure(&RunMeta{Branch: branch, TaskLabel: taskLabel, User: user, TokenLabel: tokenLabel}, "allocate run", err)
 		return nil, fmt.Errorf("allocate run: %w", err)
 	}
 
 	if meta.RunID == "" {
+		tm.logRunStartFailure(meta, "allocate run", errors.New("missing runId"))
 		return nil, fmt.Errorf("allocate run: missing runId")
 	}
 	meta.RunKey = meta.RunID
@@ -237,25 +239,30 @@ func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel
 		done:         make(chan struct{}),
 	}
 	if err := tm.initializeRunGraph(ctx, active); err != nil {
+		tm.logRunStartFailure(meta, "initialize run graph", err)
 		_ = tm.history.AbortRun(meta)
 		return nil, fmt.Errorf("initialize run graph: %w", err)
 	}
 	if err := os.MkdirAll(tm.history.RunDir(meta.RunID), 0o755); err != nil {
+		tm.logRunStartFailure(meta, "create run dir", err)
 		_ = tm.history.AbortRun(meta)
 		return nil, fmt.Errorf("create run dir: %w", err)
 	}
 	logFile, err := os.Create(tm.history.LogPath(meta.RunID))
 	if err != nil {
+		tm.logRunStartFailure(meta, "create log file", err)
 		_ = tm.history.AbortRun(meta)
 		return nil, fmt.Errorf("create log file: %w", err)
 	}
 	active.logFile = logFile
 	if err := tm.history.WriteMeta(meta); err != nil {
+		tm.logRunStartFailure(meta, "write initial meta", err)
 		logFile.Close()
 		_ = tm.history.AbortRun(meta)
 		return nil, fmt.Errorf("write initial meta: %w", err)
 	}
 	if err := tm.history.RecordRunCompletion(meta, tm.config.Storage.HistoryKeepCount); err != nil {
+		tm.logRunStartFailure(meta, "write initial history index", err)
 		logFile.Close()
 		_ = tm.history.AbortRun(meta)
 		return nil, fmt.Errorf("write initial history index: %w", err)
@@ -270,6 +277,35 @@ func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel
 	go tm.executeRun(context.Background(), active)
 
 	return meta, nil
+}
+
+func (tm *TaskManager) logRunStartFailure(meta *RunMeta, stage string, err error) {
+	if err == nil {
+		return
+	}
+	historyDir := ""
+	runID := ""
+	runDir := ""
+	logPath := ""
+	branch := ""
+	taskLabel := ""
+	user := ""
+	tokenLabel := ""
+	if tm != nil && tm.history != nil {
+		historyDir = tm.history.historyDir
+	}
+	if meta != nil {
+		runID = meta.RunID
+		branch = meta.Branch
+		taskLabel = meta.TaskLabel
+		user = meta.User
+		tokenLabel = meta.TokenLabel
+		if tm != nil && tm.history != nil && meta.RunID != "" {
+			runDir = tm.history.RunDir(meta.RunID)
+			logPath = tm.history.LogPath(meta.RunID)
+		}
+	}
+	log.Printf("runtask run start failed stage=%q run_id=%q branch=%q task=%q user=%q token_label=%q history_dir=%q run_dir=%q log_path=%q error=%v", stage, runID, branch, taskLabel, user, tokenLabel, historyDir, runDir, logPath, err)
 }
 
 // executeRun performs the full lifecycle of a run inside a goroutine.
@@ -447,14 +483,13 @@ func (tm *TaskManager) doRun(ctx context.Context, active *ActiveRun) error {
 		meta.Status = RunStatusSuccess
 	}
 
-	// Keep worktree if within the retention limit (evaluated later by PruneWorktrees).
-	meta.WorktreeKept = true
-
-	if writeErr := tm.history.WriteMeta(meta); writeErr != nil {
-		fmt.Fprintf(bw, "=== runtask: warning: failed to write meta: %v ===\n", writeErr)
-	}
-	if indexErr := tm.history.RecordRunCompletion(meta, tm.config.Storage.HistoryKeepCount); indexErr != nil {
-		fmt.Fprintf(bw, "=== runtask: warning: failed to update history index: %v ===\n", indexErr)
+	if persistErr := tm.history.PersistCompletedRun(
+		meta,
+		tm.config.Storage.HistoryKeepCount,
+		tm.config.Storage.Worktree.KeepOnSuccess,
+		tm.config.Storage.Worktree.KeepOnFailure,
+	); persistErr != nil {
+		fmt.Fprintf(bw, "=== runtask: warning: failed to persist run meta: %v ===\n", persistErr)
 	}
 
 	log.Printf("runtask run finished run_id=%q branch=%q task=%q user=%q status=%q exit_code=%d duration_ms=%d", meta.RunID, meta.Branch, meta.TaskLabel, meta.User, meta.Status, meta.ExitCode, meta.EndTime.Sub(meta.StartTime).Milliseconds())
@@ -668,8 +703,12 @@ func (tm *TaskManager) failRun(active *ActiveRun, cause error) {
 		}
 	}
 	meta.Tasks = collectTaskRuns(active)
-	_ = tm.history.WriteMeta(meta)
-	_ = tm.history.RecordRunCompletion(meta, tm.config.Storage.HistoryKeepCount)
+	_ = tm.history.PersistCompletedRun(
+		meta,
+		tm.config.Storage.HistoryKeepCount,
+		tm.config.Storage.Worktree.KeepOnSuccess,
+		tm.config.Storage.Worktree.KeepOnFailure,
+	)
 	log.Printf("runtask run failed run_id=%q branch=%q task=%q user=%q status=%q error=%q duration_ms=%d", meta.RunID, meta.Branch, meta.TaskLabel, meta.User, meta.Status, cause.Error(), meta.EndTime.Sub(meta.StartTime).Milliseconds())
 	if active.logFile != nil {
 		_ = active.logFile.Close()

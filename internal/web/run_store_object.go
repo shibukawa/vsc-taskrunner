@@ -161,6 +161,13 @@ func (s *ObjectRunStore) ListWorktreeFiles(runID string) ([]string, error) {
 	if files, err := s.local.ListWorktreeFiles(runID); err == nil {
 		return files, nil
 	}
+	archiveData, err := s.readObject(context.Background(), s.runObjectKey(runID, worktreeArchiveObjectName))
+	if err == nil {
+		return listWorktreeArchiveFiles(archiveData)
+	}
+	if !isObjectNotFound(err) {
+		return nil, err
+	}
 	prefix := s.runObjectKey(runID, "worktree/")
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
@@ -184,6 +191,9 @@ func (s *ObjectRunStore) ListWorktreeFiles(runID string) ([]string, error) {
 			files = append(files, rel)
 		}
 	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("worktree not present for run %s", runID)
+	}
 	sort.Strings(files)
 	return files, nil
 }
@@ -191,6 +201,13 @@ func (s *ObjectRunStore) ListWorktreeFiles(runID string) ([]string, error) {
 func (s *ObjectRunStore) ReadWorktreeFile(runID, filePath string) ([]byte, error) {
 	if data, err := s.local.ReadWorktreeFile(runID, filePath); err == nil {
 		return data, nil
+	}
+	archiveData, err := s.readObject(context.Background(), s.runObjectKey(runID, worktreeArchiveObjectName))
+	if err == nil {
+		return readWorktreeArchiveFile(archiveData, filePath)
+	}
+	if !isObjectNotFound(err) {
+		return nil, err
 	}
 	return s.readObject(context.Background(), s.runObjectKey(runID, filepath.ToSlash(filepath.Join("worktree", filePath))))
 }
@@ -268,21 +285,29 @@ func (s *ObjectRunStore) FinalizeRun(runID string) error {
 	if _, err := os.Stat(root); err != nil {
 		return nil
 	}
+	meta, err := s.local.ReadMeta(runID)
+	if err != nil {
+		return err
+	}
+	worktreeRoot := s.local.WorktreePath(runID)
 	if err := s.deleteRemoteRun(runID); err != nil {
 		return err
 	}
-	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	if err := filepath.WalkDir(root, func(currentPath string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
+			if currentPath == worktreeRoot {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
+		rel, err := filepath.Rel(root, currentPath)
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(currentPath)
 		if err != nil {
 			return err
 		}
@@ -296,7 +321,32 @@ func (s *ObjectRunStore) FinalizeRun(runID string) error {
 			return fmt.Errorf("upload run object %s: %w", rel, err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if !meta.WorktreeKept {
+		return nil
+	}
+	archiveFile, err := createWorktreeArchiveTemp(worktreeRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer func() {
+		_ = archiveFile.Close()
+		_ = os.Remove(archiveFile.Name())
+	}()
+	if _, err := s.client.PutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(s.runObjectKey(runID, worktreeArchiveObjectName)),
+		Body:        archiveFile,
+		ContentType: aws.String(contentTypeForRunFile(worktreeArchiveObjectName)),
+	}); err != nil {
+		return fmt.Errorf("upload worktree archive %s: %w", runID, err)
+	}
+	return nil
 }
 
 func (s *ObjectRunStore) runObjectKey(runID, rel string) string {
@@ -352,6 +402,8 @@ func (s *ObjectRunStore) listFilesUnderPrefix(prefix string) ([]string, error) {
 
 func contentTypeForRunFile(path string) string {
 	switch {
+	case strings.HasSuffix(path, ".zip"):
+		return "application/zip"
 	case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
 		return "application/x-yaml"
 	case strings.HasSuffix(path, ".log"), strings.HasSuffix(path, ".txt"):

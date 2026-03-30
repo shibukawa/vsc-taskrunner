@@ -238,6 +238,7 @@ function replaceRoute() {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method ?? 'GET'
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -258,6 +259,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       // Ignore JSON parse error.
     }
     const message = details || `${response.status} ${response.statusText}`
+    console.error('API request failed', {
+      path,
+      method,
+      status: response.status,
+      statusText: response.statusText,
+      body,
+      error: message,
+    })
     throw new Error(`${response.status}:${message}`)
   }
   return (await response.json()) as T
@@ -1214,7 +1223,7 @@ onBeforeUnmount(() => {
     <BackgroundEffect :paused="backgroundPaused" />
     <div v-if="routeNotFound || errorMessage" class="notification-layer" aria-live="polite" aria-atomic="true">
       <p v-if="routeNotFound" class="warning-banner notification-toast">
-        現在の branch/tasks.json と URL は一部一致しません。履歴が残っている run は表示を継続しています。
+        The current branch/tasks.json does not fully match the URL. Runs that still exist in history remain available.
       </p>
       <p v-if="errorMessage" class="error-banner notification-toast">{{ errorMessage }}</p>
     </div>
@@ -1222,7 +1231,7 @@ onBeforeUnmount(() => {
     <div :class="['shell', { 'shell-auth': authRequired }]">
       <section v-if="authRequired" class="glass-panel auth-required">
         <h2>Authentication Required</h2>
-        <p>この環境ではログインが必要です。</p>
+        <p>Sign-in is required in this environment.</p>
         <a :href="loginPath" class="action-link auth-login-link">Login with OIDC</a>
       </section>
 
@@ -1357,7 +1366,7 @@ onBeforeUnmount(() => {
                 <span>runs:write</span>
               </label>
             </div>
-            <p v-if="selectedTokenScopeValues.length === 0" class="artifact-meta token-helper-text">少なくとも1つの scope を選択してください</p>
+            <p v-if="selectedTokenScopeValues.length === 0" class="artifact-meta token-helper-text">Select at least one scope.</p>
 
             <p v-if="tokenError" class="error-banner token-error">{{ tokenError }}</p>
 

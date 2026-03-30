@@ -168,6 +168,118 @@ func TestPruneKeepsRunsPerBranchTaskGroup(t *testing.T) {
 	}
 }
 
+func TestPersistCompletedRunAppliesWorktreeRetentionByStatus(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	complete := func(status RunStatus, start int64) *RunMeta {
+		t.Helper()
+		ref, allocErr := store.AllocateRun("main", "build")
+		if allocErr != nil {
+			t.Fatal(allocErr)
+		}
+		meta := &RunMeta{
+			RunID:     ref.RunID,
+			RunKey:    ref.RunID,
+			Branch:    ref.Branch,
+			TaskLabel: ref.TaskLabel,
+			RunNumber: ref.RunNumber,
+			Status:    status,
+			StartTime: time.Unix(start, 0).UTC(),
+			EndTime:   time.Unix(start+1, 0).UTC(),
+		}
+		if err := store.PersistCompletedRun(meta, 100, 0, 2); err != nil {
+			t.Fatal(err)
+		}
+		return meta
+	}
+
+	success := complete(RunStatusSuccess, 10)
+	oldFailure := complete(RunStatusFailed, 20)
+	midFailure := complete(RunStatusFailed, 30)
+	newFailure := complete(RunStatusFailed, 40)
+
+	metas, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptByID := map[string]bool{}
+	for _, meta := range metas {
+		keptByID[meta.RunID] = meta.WorktreeKept
+	}
+	if keptByID[success.RunID] {
+		t.Fatal("indexed success run should not keep worktree")
+	}
+	if keptByID[oldFailure.RunID] {
+		t.Fatal("indexed oldest failed run should not keep worktree")
+	}
+	if !keptByID[midFailure.RunID] || !keptByID[newFailure.RunID] {
+		t.Fatal("indexed newest failed runs should keep worktrees")
+	}
+}
+
+func TestPruneWorktreesRemovesRunsOutsideRetention(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	complete := func(status RunStatus, start int64) *RunMeta {
+		t.Helper()
+		ref, allocErr := store.AllocateRun("main", "build")
+		if allocErr != nil {
+			t.Fatal(allocErr)
+		}
+		worktreePath := store.WorktreePath(ref.RunID)
+		if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(worktreePath, "keep.txt"), []byte(ref.RunID), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		meta := &RunMeta{
+			RunID:     ref.RunID,
+			RunKey:    ref.RunID,
+			Branch:    ref.Branch,
+			TaskLabel: ref.TaskLabel,
+			RunNumber: ref.RunNumber,
+			Status:    status,
+			StartTime: time.Unix(start, 0).UTC(),
+			EndTime:   time.Unix(start+1, 0).UTC(),
+		}
+		if err := store.PersistCompletedRun(meta, 100, 0, 2); err != nil {
+			t.Fatal(err)
+		}
+		return meta
+	}
+
+	success := complete(RunStatusSuccess, 10)
+	oldFailure := complete(RunStatusFailed, 20)
+	midFailure := complete(RunStatusFailed, 30)
+	newFailure := complete(RunStatusFailed, 40)
+
+	if err := store.PruneWorktrees(0, 2); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, runID := range []string{success.RunID, oldFailure.RunID} {
+		if _, err := os.Stat(store.WorktreePath(runID)); !os.IsNotExist(err) {
+			t.Fatalf("worktree for %s should be removed, stat err=%v", runID, err)
+		}
+	}
+	for _, runID := range []string{midFailure.RunID, newFailure.RunID} {
+		if _, err := os.Stat(store.WorktreePath(runID)); err != nil {
+			t.Fatalf("worktree for %s should remain: %v", runID, err)
+		}
+	}
+}
+
 func TestAllocateRunIsUniqueUnderConcurrency(t *testing.T) {
 	t.Parallel()
 

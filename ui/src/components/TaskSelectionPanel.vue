@@ -402,7 +402,7 @@ onBeforeUnmount(() => {
               </span>
             </button>
           </div>
-          <p v-else class="empty-copy">この branch では task が見つかりません。</p>
+          <p v-else class="empty-copy">No tasks were found for this branch.</p>
         </template>
       </div>
 
@@ -431,7 +431,7 @@ onBeforeUnmount(() => {
             </span>
           </button>
         </div>
-        <p v-else class="empty-copy">表示できる run はありません。</p>
+        <p v-else class="empty-copy">No runs are available to display.</p>
       </div>
     </div>
   </article>

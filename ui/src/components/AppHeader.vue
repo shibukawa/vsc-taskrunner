@@ -147,8 +147,8 @@ onBeforeUnmount(() => {
         <div v-if="settingsMenuOpen" class="topbar-popover settings-popover" role="dialog" aria-label="Settings">
           <label class="toggle-row">
             <span class="toggle-copy">
-              <strong>背景アニメーション</strong>
-              <small>{{ backgroundPaused ? '停止中' : '再生中' }}</small>
+              <strong>Background Animation</strong>
+              <small>{{ backgroundPaused ? 'Paused' : 'Playing' }}</small>
             </span>
             <button
               class="toggle-switch"
@@ -161,7 +161,7 @@ onBeforeUnmount(() => {
               <span class="toggle-knob"></span>
             </button>
           </label>
-          <button v-if="isAdmin" class="menu-action" type="button" @click="emit('open-settings')">設定詳細</button>
+          <button v-if="isAdmin" class="menu-action" type="button" @click="emit('open-settings')">Configuration Details</button>
         </div>
       </div>
     </div>

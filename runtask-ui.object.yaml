@@ -40,11 +40,11 @@ auth:
     store:
       backend: object
       object:
-        endpoint: http://127.0.0.1:9000
+        endpoint: http://rustfs:9000
         bucket: runtask-tokens
         region: us-east-1
-        accessKey: minioadmin
-        secretKey: minioadmin
+        accessKey: rustfsadmin
+        secretKey: rustfsadmin
         prefix: runtask/demo
         forcePathStyle: true
 
@@ -106,17 +106,16 @@ metrics:
 
 storage:
   backend: object
-  # default: .runtask/history
-  historyDir: /var/lib/runtask/history
+  # default: OS temp dir based staging when backend=object
   # default: 100
   historyKeepCount: 50
   object:
-    endpoint: http://seaweedfs-s3:8333
+    endpoint: http://rustfs:9000
     bucket: runtask
     # default: us-east-1
     region: us-east-1
-    accessKey: admin
-    secretKey: admin123
+    accessKey: rustfsadmin
+    secretKey: rustfsadmin
     prefix: runtask
     forcePathStyle: true
   worktree:

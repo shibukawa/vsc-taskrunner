@@ -554,6 +554,7 @@ func (s *Server) resetEphemeralCache(ctx context.Context) error {
 	if basePath == "" {
 		return nil
 	}
+	log.Printf("runtask ephemeral emulation deleting repository cache=%q idle=%s", basePath, s.ephemeralEmulationIdle)
 	if err := os.RemoveAll(basePath); err != nil {
 		return fmt.Errorf("remove repository cache %s: %w", basePath, err)
 	}
@@ -616,6 +617,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 
 		meta, err := s.manager.StartRunWithInputs(r.Context(), req.Branch, req.TaskLabel, req.User, tokenLabel, req.InputValues)
 		if err != nil {
+			log.Printf("runtask api run start failed branch=%q task=%q user=%q token_label=%q auth_method=%q remote_addr=%q error=%v", req.Branch, req.TaskLabel, req.User, tokenLabel, AuthMethodFromContext(r.Context()), r.RemoteAddr, err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

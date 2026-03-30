@@ -20,50 +20,47 @@ services:
       timeout: 5s
       retries: 10
 
-  seaweedfs-master:
-    image: chrislusf/seaweedfs:3.90
-    command: ["master", "-mdir=/data", "-ip=seaweedfs-master"]
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      # Local-only single drive layout. Redundancy and availability are intentionally disabled.
+      RUSTFS_VOLUMES: /data/rustfs0
     volumes:
-      - seaweedfs-master-data:/data
+      - rustfs-data:/data
+      - rustfs-logs:/logs
     ports:
-      - "9333:9333"
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sS http://localhost:9000/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
-  seaweedfs-volume:
-    image: chrislusf/seaweedfs:3.90
-    command: ["volume", "-mserver=seaweedfs-master:9333", "-dir=/data", "-ip=seaweedfs-volume"]
-    volumes:
-      - seaweedfs-volume-data:/data
-    depends_on:
-      - seaweedfs-master
-
-  seaweedfs-filer:
-    image: chrislusf/seaweedfs:3.90
-    command: ["filer", "-master=seaweedfs-master:9333"]
-    depends_on:
-      - seaweedfs-master
-      - seaweedfs-volume
-
-  seaweedfs-s3:
-    image: chrislusf/seaweedfs:3.90
-    command: ["s3", "-filer=seaweedfs-filer:8888", "-port=8333"]
-    ports:
-      - "8333:8333"
-    depends_on:
-      - seaweedfs-filer
-
-  seaweedfs-init:
+  rustfs-init:
     image: amazon/aws-cli:2.31.15
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -eu
-        aws --endpoint-url http://seaweedfs-s3:8333 s3api create-bucket --bucket runtask || true
+        until aws --endpoint-url http://rustfs:9000 s3api list-buckets >/dev/null 2>&1; do
+          sleep 2
+        done
+        for bucket in runtask runtask-tokens; do
+          aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket "$$bucket" || true
+        done
     environment:
-      AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: admin123
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
       AWS_REGION: us-east-1
     depends_on:
-      - seaweedfs-s3
+      rustfs:
+        condition: service_healthy
 
   runtask-ui:
     build:
@@ -81,17 +78,15 @@ services:
     volumes:
       - ./runtask-ui.object.yaml:/app/config/runtask-ui.object.yaml:ro
       - runtask-repos:/var/lib/runtask/repos
-      - runtask-history:/var/lib/runtask/history
     extra_hosts:
       - "oidc.localhost:host-gateway"
     depends_on:
       oidcld:
         condition: service_healthy
-      seaweedfs-init:
+      rustfs-init:
         condition: service_completed_successfully
 
 volumes:
   runtask-repos:
-  runtask-history:
-  seaweedfs-master-data:
-  seaweedfs-volume-data:
+  rustfs-data:
+  rustfs-logs:

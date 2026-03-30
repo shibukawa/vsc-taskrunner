@@ -455,7 +455,7 @@ const timelineTasks = computed<TimelineTask[]>(() => {
           </div>
 
           <section class="result-logs result-grid-body result-grid-body-logs">
-            <pre class="terminal"><template v-for="(segment, index) in currentLogSegments" :key="index"><span :class="segment.class" :style="segment.style">{{ segment.text }}</span></template><template v-if="!currentLogSegments.length">ログはまだありません。</template></pre>
+            <pre class="terminal"><template v-for="(segment, index) in currentLogSegments" :key="index"><span :class="segment.class" :style="segment.style">{{ segment.text }}</span></template><template v-if="!currentLogSegments.length">No logs yet.</template></pre>
           </section>
         </div>
       </div>
