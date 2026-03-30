@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   Branch, BranchTask, TaskInput, TaskRun, ArtifactItem, RunMeta,
   RunStartResponse, MeResponse, RouteState, SSETaskEvent,
-  MetricsSnapshot, APITokenItem, APITokenCreateResponse,
+  MetricsSnapshot, APITokenItem, APITokenCreateResponse, SettingsSummary,
 } from './types'
 import { parseAnsiToSegments } from './ansi'
 import BackgroundEffect from './components/BackgroundEffect.vue'
@@ -45,7 +45,9 @@ const apiTokensEnabled = ref(false)
 const routeNotFound = ref(false)
 const backgroundPaused = ref(false)
 const tokenManagerOpen = ref(false)
+const settingsDialogOpen = ref(false)
 const tokenItems = ref<APITokenItem[]>([])
+const settingsSummary = ref<SettingsSummary | null>(null)
 const tokenLabel = ref('')
 const tokenTTLDays = ref(30)
 const tokenScopeRead = ref(true)
@@ -55,6 +57,8 @@ const createdTokenItemId = ref('')
 const createdTokenScopes = ref<string[]>([])
 const tokenLoading = ref(false)
 const tokenError = ref('')
+const settingsLoading = ref(false)
+const settingsError = ref('')
 const tokenExampleBranch = ref<string | null>(null)
 const tokenExampleTask = ref<string | null>(null)
 const tokenExampleTasks = ref<BranchTask[]>([])
@@ -296,6 +300,17 @@ async function loadMe() {
     }
     errorMessage.value = message
   }
+}
+
+function statusLabel(value: boolean, positive = 'Enabled', negative = 'Disabled'): string {
+  return value ? positive : negative
+}
+
+function storeSummaryLabel(store: SettingsSummary['auth']['apiTokenStore'] | SettingsSummary['storage']['object']): string {
+  if (!store.backend) {
+    return 'Not configured'
+  }
+  return store.backend
 }
 
 function loadBackgroundPreference() {
@@ -578,6 +593,31 @@ function closeTokenManager() {
   createdTokenScopes.value = []
   copiedToken.value = false
   copiedCurlTarget.value = null
+}
+
+function closeSettingsDialog() {
+  settingsDialogOpen.value = false
+  settingsError.value = ''
+}
+
+async function loadSettings() {
+  settingsSummary.value = await api<SettingsSummary>('/api/settings')
+}
+
+async function openSettingsDialog() {
+  if (!isAdmin.value) {
+    return
+  }
+  settingsDialogOpen.value = true
+  settingsLoading.value = true
+  settingsError.value = ''
+  try {
+    await loadSettings()
+  } catch (error) {
+    settingsError.value = asErrorMessage(error)
+  } finally {
+    settingsLoading.value = false
+  }
 }
 
 async function loadAPITokens() {
@@ -1113,8 +1153,19 @@ function handlePopState() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && runDialogOpen.value) {
+  if (event.key !== 'Escape') {
+    return
+  }
+  if (runDialogOpen.value) {
     closeRunDialog()
+    return
+  }
+  if (tokenManagerOpen.value) {
+    closeTokenManager()
+    return
+  }
+  if (settingsDialogOpen.value) {
+    closeSettingsDialog()
   }
 }
 
@@ -1129,6 +1180,13 @@ watch(() => selectedRunDetail.value?.tasks, () => {
 onMounted(async () => {
   loadBackgroundPreference()
   await loadMe()
+  if (isAdmin.value) {
+    try {
+      await loadSettings()
+    } catch {
+      settingsSummary.value = null
+    }
+  }
   if (!authRequired.value) {
     await initializeFromRoute(parseRoute(window.location.pathname))
     startMetricsStream()
@@ -1174,16 +1232,18 @@ onBeforeUnmount(() => {
           :login-path="loginPath"
           :authenticated="authenticated"
           :can-manage-tokens="canManageTokens"
+          :is-admin="isAdmin"
           :current-user="currentUser"
           :user-name="userName"
           :user-email="userEmail"
           :background-paused="backgroundPaused"
+          @open-settings="openSettingsDialog"
           @open-token-manager="openTokenManager"
           @logout="logout"
           @update:background-paused="backgroundPaused = $event"
         />
 
-        <MetricsPanel :metrics="metrics" />
+        <MetricsPanel :metrics="metrics" :metrics-config="settingsSummary?.metrics ?? null" />
 
         <TaskSelectionPanel
           :branches="branches"
@@ -1365,6 +1425,110 @@ onBeforeUnmount(() => {
                   <button class="ghost compact-button" :disabled="tokenLoading || !!item.revokedAt" type="button" @click="revokeAPIToken(item.id)">Revoke</button>
                 </div>
               </article>
+            </div>
+          </section>
+        </div>
+
+        <div v-if="settingsDialogOpen" class="run-dialog-backdrop" @click.self="closeSettingsDialog">
+          <section class="glass-panel run-dialog token-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
+            <div class="panel-head">
+              <div>
+                <h2 id="settings-dialog-title">Settings Summary</h2>
+                <p class="panel-subtitle">resolved runtime configuration</p>
+              </div>
+            </div>
+
+            <p v-if="settingsError" class="error-banner token-error">{{ settingsError }}</p>
+            <p v-else-if="settingsLoading" class="artifact-meta token-helper-text">Loading settings...</p>
+
+            <div v-if="settingsSummary && !settingsLoading" class="settings-grid">
+              <article class="artifact-card settings-section">
+                <strong>Repository</strong>
+                <dl class="settings-list">
+                  <dt>Source</dt>
+                  <dd>{{ settingsSummary.repository.source || 'Not configured' }}</dd>
+                  <dt>Cache path</dt>
+                  <dd>{{ settingsSummary.repository.cachePath || 'Not configured' }}</dd>
+                  <dt>Access token</dt>
+                  <dd>{{ statusLabel(settingsSummary.repository.accessTokenConfigured, 'Configured', 'Not configured') }}</dd>
+                </dl>
+              </article>
+
+              <article class="artifact-card settings-section">
+                <strong>Auth</strong>
+                <dl class="settings-list">
+                  <dt>Mode</dt>
+                  <dd>{{ statusLabel(settingsSummary.auth.noAuth, 'NoAuth', 'OIDC') }}</dd>
+                  <dt>Issuer</dt>
+                  <dd>{{ settingsSummary.auth.oidcIssuer || 'Not configured' }}</dd>
+                  <dt>API tokens</dt>
+                  <dd>{{ statusLabel(settingsSummary.auth.apiTokensEnabled) }}</dd>
+                  <dt>Token store</dt>
+                  <dd>{{ storeSummaryLabel(settingsSummary.auth.apiTokenStore) }}</dd>
+                  <dt v-if="settingsSummary.auth.apiTokenStore.localPath">Token path</dt>
+                  <dd v-if="settingsSummary.auth.apiTokenStore.localPath">{{ settingsSummary.auth.apiTokenStore.localPath }}</dd>
+                  <dt v-if="settingsSummary.auth.apiTokenStore.endpoint">Endpoint</dt>
+                  <dd v-if="settingsSummary.auth.apiTokenStore.endpoint">{{ settingsSummary.auth.apiTokenStore.endpoint }}</dd>
+                  <dt v-if="settingsSummary.auth.apiTokenStore.bucket">Bucket</dt>
+                  <dd v-if="settingsSummary.auth.apiTokenStore.bucket">{{ settingsSummary.auth.apiTokenStore.bucket }}</dd>
+                  <dt v-if="settingsSummary.auth.apiTokenStore.region">Region</dt>
+                  <dd v-if="settingsSummary.auth.apiTokenStore.region">{{ settingsSummary.auth.apiTokenStore.region }}</dd>
+                  <dt v-if="settingsSummary.auth.apiTokenStore.prefix">Prefix</dt>
+                  <dd v-if="settingsSummary.auth.apiTokenStore.prefix">{{ settingsSummary.auth.apiTokenStore.prefix }}</dd>
+                </dl>
+              </article>
+
+              <article class="artifact-card settings-section">
+                <strong>Execution</strong>
+                <dl class="settings-list">
+                  <dt>Max parallel runs</dt>
+                  <dd>{{ settingsSummary.execution.maxParallelRuns }}</dd>
+                </dl>
+              </article>
+
+              <article class="artifact-card settings-section">
+                <strong>Metrics</strong>
+                <dl class="settings-list">
+                  <dt>Status</dt>
+                  <dd>{{ statusLabel(settingsSummary.metrics.enabled) }}</dd>
+                  <dt>CPU interval</dt>
+                  <dd>{{ settingsSummary.metrics.cpuInterval }}s</dd>
+                  <dt>Memory interval</dt>
+                  <dd>{{ settingsSummary.metrics.memoryInterval }}s</dd>
+                  <dt>Storage interval</dt>
+                  <dd>{{ settingsSummary.metrics.storageInterval }}s</dd>
+                  <dt>Memory history window</dt>
+                  <dd>{{ settingsSummary.metrics.memoryHistoryWindow }}s</dd>
+                </dl>
+              </article>
+
+              <article class="artifact-card settings-section">
+                <strong>Storage</strong>
+                <dl class="settings-list">
+                  <dt>Backend</dt>
+                  <dd>{{ settingsSummary.storage.backend || 'local' }}</dd>
+                  <dt>History dir</dt>
+                  <dd>{{ settingsSummary.storage.historyDir || 'Not configured' }}</dd>
+                  <dt>History keep count</dt>
+                  <dd>{{ settingsSummary.storage.historyKeepCount }}</dd>
+                  <dt>Keep worktrees on success</dt>
+                  <dd>{{ settingsSummary.storage.worktree.keepOnSuccess }}</dd>
+                  <dt>Keep worktrees on failure</dt>
+                  <dd>{{ settingsSummary.storage.worktree.keepOnFailure }}</dd>
+                  <dt v-if="settingsSummary.storage.object.endpoint">Endpoint</dt>
+                  <dd v-if="settingsSummary.storage.object.endpoint">{{ settingsSummary.storage.object.endpoint }}</dd>
+                  <dt v-if="settingsSummary.storage.object.bucket">Bucket</dt>
+                  <dd v-if="settingsSummary.storage.object.bucket">{{ settingsSummary.storage.object.bucket }}</dd>
+                  <dt v-if="settingsSummary.storage.object.region">Region</dt>
+                  <dd v-if="settingsSummary.storage.object.region">{{ settingsSummary.storage.object.region }}</dd>
+                  <dt v-if="settingsSummary.storage.object.prefix">Prefix</dt>
+                  <dd v-if="settingsSummary.storage.object.prefix">{{ settingsSummary.storage.object.prefix }}</dd>
+                </dl>
+              </article>
+            </div>
+
+            <div class="run-dialog-actions">
+              <button class="ghost compact-button" type="button" @click="closeSettingsDialog">Close</button>
             </div>
           </section>
         </div>

@@ -6,6 +6,7 @@ const props = defineProps<{
   loginPath: string
   authenticated: boolean
   canManageTokens: boolean
+  isAdmin: boolean
   currentUser: string
   userName: string
   userEmail: string
@@ -15,6 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   logout: []
   'open-token-manager': []
+  'open-settings': []
   'update:backgroundPaused': [value: boolean]
 }>()
 
@@ -159,6 +161,7 @@ onBeforeUnmount(() => {
               <span class="toggle-knob"></span>
             </button>
           </label>
+          <button v-if="isAdmin" class="menu-action" type="button" @click="emit('open-settings')">設定詳細</button>
         </div>
       </div>
     </div>

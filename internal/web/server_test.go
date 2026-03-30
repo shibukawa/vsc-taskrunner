@@ -411,6 +411,164 @@ func TestHandleMeExposesCanRun(t *testing.T) {
 	}
 }
 
+func TestHandleSettingsReturnsResolvedSummaryForAdmin(t *testing.T) {
+	t.Setenv("REPO_ACCESS_TOKEN", "present")
+	repo := &serverTestRepo{basePath: filepath.Join(t.TempDir(), "cache.git")}
+	cfg := uiconfig.DefaultConfig()
+	cfg.Repository.Source = "https://github.com/example/repo.git"
+	cfg.Repository.CachePath = ".cache/repo.git"
+	cfg.Repository.Auth = uiconfig.RepositoryAuthConfig{
+		Type:     "envToken",
+		TokenEnv: "REPO_ACCESS_TOKEN",
+	}
+	cfg.Auth.AdminUsers = []uiconfig.UserAccessRule{{Claim: "groups", Value: "admin"}}
+	cfg.Auth.NoAuth = false
+	cfg.Auth.OIDCIssuer = "https://issuer.example.com"
+	cfg.Auth.APITokens.Enabled = true
+	cfg.Auth.APITokens.Store.Backend = "local"
+	cfg.Auth.APITokens.Store.LocalPath = ".runtask/api-tokens.json"
+	cfg.Storage.Backend = "local"
+	cfg.Storage.HistoryDir = ".runtask/history"
+	cfg.Storage.HistoryKeepCount = 42
+	cfg.Execution.MaxParallelRuns = 7
+	cfg.Metrics.CPUInterval = 2
+	cfg.Metrics.MemoryInterval = 3
+	cfg.Metrics.StorageInterval = 4
+	cfg.Metrics.MemoryHistoryWindow = 120
+	historyDir := filepath.Join(t.TempDir(), "workspace", ".runtask", "history")
+	history, err := NewHistoryStore(historyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := &Authenticator{}
+	auth.SetTokenService(NewAPITokenService(cfg.Auth.APITokens, NewLocalAPITokenStore(uiconfig.ResolveAPITokenLocalPath(historyDir, cfg.Auth.APITokens.Store.LocalPath))))
+	server := NewServer(repo, cfg, NewTaskManager(repo, cfg, history), auth)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, map[string]interface{}{
+		"groups": []interface{}{"admin"},
+	}))
+	rec := httptest.NewRecorder()
+
+	server.handleSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body settingsSummaryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Repository.Source != cfg.Repository.Source {
+		t.Fatalf("repository.source = %q, want %q", body.Repository.Source, cfg.Repository.Source)
+	}
+	if body.Repository.CachePath != filepath.Join(filepath.Dir(filepath.Dir(historyDir)), cfg.Repository.CachePath) {
+		t.Fatalf("repository.cachePath = %q", body.Repository.CachePath)
+	}
+	if !body.Repository.AccessTokenConfigured {
+		t.Fatal("expected repository access token to be marked configured")
+	}
+	if body.Auth.OIDCIssuer != cfg.Auth.OIDCIssuer {
+		t.Fatalf("oidcIssuer = %q", body.Auth.OIDCIssuer)
+	}
+	if !body.Auth.APITokensEnabled {
+		t.Fatal("expected apiTokensEnabled")
+	}
+	if body.Auth.APITokenStore.LocalPath != uiconfig.ResolveAPITokenLocalPath(historyDir, cfg.Auth.APITokens.Store.LocalPath) {
+		t.Fatalf("apiTokenStore.localPath = %q", body.Auth.APITokenStore.LocalPath)
+	}
+	if body.Storage.HistoryDir != historyDir {
+		t.Fatalf("storage.historyDir = %q, want %q", body.Storage.HistoryDir, historyDir)
+	}
+	if body.Execution.MaxParallelRuns != 7 {
+		t.Fatalf("maxParallelRuns = %d", body.Execution.MaxParallelRuns)
+	}
+	if body.Metrics.CPUInterval != 2 || body.Metrics.MemoryInterval != 3 || body.Metrics.StorageInterval != 4 || body.Metrics.MemoryHistoryWindow != 120 {
+		t.Fatalf("unexpected metrics summary: %+v", body.Metrics)
+	}
+	if strings.Contains(rec.Body.String(), "present") {
+		t.Fatalf("settings response leaked token value: %s", rec.Body.String())
+	}
+}
+
+func TestHandleSettingsRejectsNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	cfg := uiconfig.DefaultConfig()
+	cfg.Auth.AdminUsers = []uiconfig.UserAccessRule{{Claim: "groups", Value: "admin"}}
+	server := NewServer(nil, cfg, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, map[string]interface{}{
+		"groups": []interface{}{"runner"},
+	}))
+	rec := httptest.NewRecorder()
+
+	server.handleSettings(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSettingsReturnsForbiddenInNoAuthMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := uiconfig.DefaultConfig()
+	cfg.Auth.NoAuth = true
+	server := NewServer(nil, cfg, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSettingsReturnsObjectStorageSummary(t *testing.T) {
+	t.Parallel()
+
+	cfg := uiconfig.DefaultConfig()
+	cfg.Auth.AdminUsers = []uiconfig.UserAccessRule{{Claim: "groups", Value: "admin"}}
+	cfg.Auth.APITokens.Store.Backend = "object"
+	cfg.Auth.APITokens.Store.Object = uiconfig.ObjectStorageConfig{
+		Endpoint: "https://s3.example.com",
+		Bucket:   "token-bucket",
+		Region:   "ap-northeast-1",
+		Prefix:   "tokens",
+	}
+	cfg.Storage.Backend = "object"
+	cfg.Storage.Object = uiconfig.ObjectStorageConfig{
+		Endpoint: "https://storage.example.com",
+		Bucket:   "history-bucket",
+		Region:   "us-east-1",
+		Prefix:   "runs",
+	}
+	server := NewServer(nil, cfg, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, map[string]interface{}{
+		"groups": []interface{}{"admin"},
+	}))
+	rec := httptest.NewRecorder()
+
+	server.handleSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body settingsSummaryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Auth.APITokenStore.Endpoint != "https://s3.example.com" || body.Auth.APITokenStore.Bucket != "token-bucket" {
+		t.Fatalf("unexpected token object store summary: %+v", body.Auth.APITokenStore)
+	}
+	if body.Storage.Object.Endpoint != "https://storage.example.com" || body.Storage.Object.Bucket != "history-bucket" {
+		t.Fatalf("unexpected storage object summary: %+v", body.Storage.Object)
+	}
+}
+
 func TestHandleRunsPostReturnsPreinitializedTasks(t *testing.T) {
 	t.Parallel()
 

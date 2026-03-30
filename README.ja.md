@@ -17,6 +17,14 @@ https://opensource.org/licenses/mit-license.php
 
 ## 基本動作
 
+Web UI 用の `taskrun-ui.yaml` では、`runtask ui init` / `runtask ui edit task` / `runtask ui edit branch` は基本設定に限定しています。複雑な UI config は直接 YAML を編集し、次の補助資産を使う前提です。
+
+- `config-schema.json`: エディタ補完と構文検査
+- `llms.txt`: 生成 AI 向けガイド
+- `.codex/skills/taskrun-ui-config/SKILL.md`: Codex 向け手順
+
+実装上の最終判定は Go 側 validation、editor support は schema、AI support は `llms.txt` / skill が担当します。
+
 ### task 一覧
 
 ```sh

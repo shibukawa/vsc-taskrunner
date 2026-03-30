@@ -182,6 +182,49 @@ export type MetricsSnapshot = {
   }
 }
 
+export type SettingsStoreSummary = {
+  backend: string
+  localPath?: string
+  endpoint?: string
+  bucket?: string
+  region?: string
+  prefix?: string
+}
+
+export type SettingsSummary = {
+  repository: {
+    source: string
+    cachePath: string
+    accessTokenConfigured: boolean
+  }
+  auth: {
+    noAuth: boolean
+    oidcIssuer: string
+    apiTokensEnabled: boolean
+    apiTokenStore: SettingsStoreSummary
+  }
+  execution: {
+    maxParallelRuns: number
+  }
+  metrics: {
+    enabled: boolean
+    cpuInterval: number
+    memoryInterval: number
+    storageInterval: number
+    memoryHistoryWindow: number
+  }
+  storage: {
+    backend: string
+    historyDir: string
+    historyKeepCount: number
+    worktree: {
+      keepOnSuccess: number
+      keepOnFailure: number
+    }
+    object: SettingsStoreSummary
+  }
+}
+
 export type MemoryPoint = {
   timestamp: string
   usedBytes: number

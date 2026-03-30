@@ -1,0 +1,256 @@
+# taskrun-ui.yaml LLM Guide
+
+This guide is only for `taskrun-ui.yaml`, the configuration file for `runtask ui`.
+It does not cover `.vscode/tasks.json`; that remains standard VS Code task configuration.
+
+## UI command limits
+
+`runtask ui init`, `runtask ui edit task`, and `runtask ui edit branch` intentionally cover only basic setup:
+
+- repository source
+- allowed branches
+- a simple task allowlist
+- one artifact path per task
+- basic auth mode
+- basic storage mode
+
+If the user needs advanced auth rules, token storage, object storage tuning, logging redaction, pre-run commands, or sparse/full worktree control, edit `taskrun-ui.yaml` directly instead of trying to force those settings through the interactive UI commands.
+
+## Required schema comment
+
+When generating or rewriting `taskrun-ui.yaml`, always put this exact comment on the first line:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json
+```
+
+Use the comment form. Do not add a top-level `$schema` key.
+
+## Top-level keys
+
+- `server`
+- `repository`
+- `auth`
+- `branches`
+- `tasks`
+- `execution`
+- `metrics`
+- `logging`
+- `storage`
+
+Only `repository.source` is always required. Most other settings have defaults in Go validation.
+
+## Field reference
+
+### `server`
+
+- `host`: bind host, default `localhost`
+- `port`: bind port, default `8080`, must be `1..65535`
+- `publicURL`: absolute `http://` or `https://` URL, used for external links and OIDC callback generation
+
+### `repository`
+
+- `source`: local git path or remote repository URL, required
+- `localPath`: optional local clone path for remote repositories
+- `cachePath`: required by Go validation when `source` is remote
+- `auth`: optional token validation settings for remote repositories
+
+### `repository.auth`
+
+- `type`: currently only `envToken`
+- `provider`: `github`, `gitlab`, or `bitbucket`
+- `tokenEnv`: environment variable containing the token
+- `baseURL`: optional provider API base URL, mainly for self-managed GitLab
+- `repo`: allowed repository identifier such as `owner/repo` or `group/project`
+- `allowedHosts`: allowlist of remote/API hosts
+- `rejectBroadScope`: default `true`
+- `requireReadOnly`: default `true`
+
+### `auth`
+
+- `noAuth`: disable authentication entirely
+- `oidcIssuer`, `oidcClientID`, `oidcClientSecret`: OIDC settings
+- `sessionSecret`: session signing secret
+- `allowUsers`: mapping from claim to glob or list of globs
+- `adminUsers`: same shape as `allowUsers`
+- `apiTokens`: admin-issued API token settings
+
+### `auth.apiTokens`
+
+- `enabled`: requires `auth.noAuth=false`
+- `defaultTTLHours`: default `720`
+- `maxPerUser`: default `10`
+- `store.backend`: `local` or `object`
+- `store.localPath`: default `.runtask/api-tokens.json`
+- `store.object.*`: separate object storage settings for token persistence
+
+### `branches`
+
+- List of allowed branch patterns
+- If omitted or empty, only top-level local branches are allowed
+
+### `tasks`
+
+`tasks` is a mapping keyed by task-label glob pattern. The first matching pattern wins, so order matters.
+
+Each task config may contain:
+
+- `artifacts`
+- `preRunTask`
+- `worktreeDisabled`
+
+### `tasks.<pattern>.artifacts[]`
+
+- `path`: required path or glob to collect
+- `format`: `zip` or `file`, default `zip`
+- `nameTemplate`: archive filename template, default `artifacts.zip`
+
+Notes:
+
+- `format: zip` creates one archive per rule
+- `format: file` keeps matching files individually
+- duplicate matches across rules are allowed
+
+### `tasks.<pattern>.preRunTask[]`
+
+- `command`: required
+- `args`: optional string list
+- `cwd`: optional working directory
+- `env`: optional string map
+- `shell.executable`: required only when `shell` is set
+- `shell.args`: optional shell args
+
+Behavior:
+
+- pre-run commands execute once before the selected parent task
+- they are written into the combined log
+- they are not stored as child tasks
+- if a pre-run command fails, the parent task does not start
+
+### `tasks.<pattern>.worktreeDisabled`
+
+- default `false`
+- when `true`, the task runs in the sparse tasks-only workspace instead of the full worktree
+
+### `execution`
+
+- `maxParallelRuns`: default `4`
+- `0` means unlimited
+
+### `metrics`
+
+- `enabled`: default `true`
+- `cpuInterval`: default `5`
+- `memoryInterval`: default `15`
+- `storageInterval`: default `60`
+- `memoryHistoryWindow`: default `300`
+
+All metric intervals must be positive.
+
+### `logging`
+
+- `redaction.names`: extra secret-like names to redact
+- `redaction.tokens`: extra literal tokens to redact
+
+### `storage`
+
+- `backend`: `local` or `object`, default `local`
+- `historyDir`: default `.runtask/history`
+- `historyKeepCount`: default `100`
+- `object.*`: object storage config used when `backend: object`
+- `worktree.keepOnSuccess`: default `0`
+- `worktree.keepOnFailure`: default `3`
+
+Object storage requires at least:
+
+- `endpoint`
+- `bucket`
+
+`region` defaults to `us-east-1`.
+
+## Generation rules
+
+When generating YAML:
+
+- Put the schema comment on line 1.
+- Prefer omitting fields that are equal to defaults unless the user explicitly wants them shown.
+- Use placeholder secrets like `${OIDC_CLIENT_SECRET}` instead of real secret values.
+- Keep `tasks` entries in priority order because first match wins.
+- Do not assume `preRunTask` becomes a visible child task.
+- Do not assume `worktreeDisabled: true` means “disabled task”; it means sparse workspace execution.
+- For remote repositories, remember that Go validation may still require `cachePath` even if the schema cannot fully express that cross-field rule.
+- For `auth.apiTokens.enabled: true`, remember Go validation also requires `auth.noAuth=false`.
+
+## Common patterns
+
+### Minimal local repo
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json
+repository:
+  source: /srv/repos/demo
+auth:
+  noAuth: true
+tasks:
+  build: {}
+```
+
+### OIDC with admin token issuance
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json
+server:
+  publicURL: https://runtask.example.com
+repository:
+  source: https://github.com/acme/demo.git
+  cachePath: /var/lib/runtask/demo-cache.git
+  auth:
+    type: envToken
+    provider: github
+    tokenEnv: GITHUB_FINE_GRAINED_TOKEN
+    repo: acme/demo
+    allowedHosts:
+      - github.com
+      - api.github.com
+auth:
+  oidcIssuer: https://issuer.example.com
+  oidcClientID: runtask
+  oidcClientSecret: ${OIDC_CLIENT_SECRET}
+  sessionSecret: ${SESSION_SECRET}
+  adminUsers:
+    role:
+      - administrator
+  apiTokens:
+    enabled: true
+tasks:
+  deploy: {}
+```
+
+### Artifact collection with pre-run install
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json
+repository:
+  source: /srv/repos/frontend
+auth:
+  noAuth: true
+tasks:
+  build:
+    artifacts:
+      - path: dist
+        format: zip
+        nameTemplate: frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip
+    preRunTask:
+      - command: npm
+        args:
+          - ci
+        cwd: ${workspaceFolder}
+```
+
+## Related files
+
+- Schema: `https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json`
+- Human-readable reference: `docs/web-ui.ja.md`
+- Codex workflow: `.codex/skills/taskrun-ui-config/SKILL.md`
+
+Go validation in `internal/uiconfig/config.go` is the final source of truth when schema and prose are not enough to express a rule.

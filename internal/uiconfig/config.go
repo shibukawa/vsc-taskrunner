@@ -95,6 +95,19 @@ type RepositoryAuthConfig struct {
 
 type AllowedTaskSpecs []AllowedTaskSpec
 
+func (s AllowedTaskSpecs) MarshalYAML() (interface{}, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	for _, spec := range s {
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: spec.Pattern})
+		valueNode := &yaml.Node{}
+		if err := valueNode.Encode(spec.Config); err != nil {
+			return nil, err
+		}
+		node.Content = append(node.Content, valueNode)
+	}
+	return node, nil
+}
+
 type AllowedTaskSpec struct {
 	Pattern string
 	Config  TaskUIConfig
@@ -118,6 +131,35 @@ type UserAccessRule struct {
 }
 
 type UserAccessRules []UserAccessRule
+
+func (r UserAccessRules) MarshalYAML() (interface{}, error) {
+	if len(r) == 0 {
+		return nil, nil
+	}
+	grouped := make(map[string][]string)
+	order := make([]string, 0, len(r))
+	for _, rule := range r {
+		if _, ok := grouped[rule.Claim]; !ok {
+			order = append(order, rule.Claim)
+		}
+		grouped[rule.Claim] = append(grouped[rule.Claim], rule.Value)
+	}
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	for _, claim := range order {
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: claim})
+		values := grouped[claim]
+		if len(values) == 1 {
+			node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: values[0]})
+			continue
+		}
+		valueNode := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, value := range values {
+			valueNode.Content = append(valueNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: value})
+		}
+		node.Content = append(node.Content, valueNode)
+	}
+	return node, nil
+}
 
 func (r *UserAccessRules) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {

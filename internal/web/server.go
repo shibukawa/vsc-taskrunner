@@ -149,6 +149,7 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("/auth/callback", s.auth.HandleCallback)
 		s.mux.HandleFunc("/auth/logout", s.auth.HandleLogout)
 		s.mux.HandleFunc("GET /api/me", apiAny(s.handleMe))
+		s.mux.HandleFunc("GET /api/settings", apiAny(s.handleSettings))
 		s.mux.HandleFunc("GET /api/git/branches", sessionOnly(s.handleBranches))
 		s.mux.HandleFunc("POST /api/git/fetch", sessionOnly(s.handleFetch))
 		s.mux.HandleFunc("GET /api/git/branches/{branch}/tasks", sessionOnly(s.handleBranchTasks))
@@ -166,6 +167,7 @@ func (s *Server) routes() {
 	}
 
 	s.mux.HandleFunc("GET /api/me", s.handleMe)
+	s.mux.HandleFunc("GET /api/settings", s.handleSettings)
 	s.mux.HandleFunc("GET /api/git/branches", s.handleBranches)
 	s.mux.HandleFunc("POST /api/git/fetch", s.handleFetch)
 	s.mux.HandleFunc("GET /api/git/branches/{branch}/tasks", s.handleBranchTasks)

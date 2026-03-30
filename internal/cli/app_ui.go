@@ -16,6 +16,13 @@ import (
 )
 
 func (a *App) runUI(args []string) int {
+	if len(args) > 0 && args[0] == "init" {
+		return a.runUIInit(args[1:])
+	}
+	if len(args) > 0 && args[0] == "edit" {
+		return a.runUIEdit(args[1:])
+	}
+
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 
@@ -175,16 +182,11 @@ func (a *App) loadUIContext(repoPath string, configPath string) (gitutil.Reposit
 	if repoPath != "" {
 		cfg.Repository.Source = repoPath
 	}
-	if !isRemoteSource(cfg.Repository.Source) && !filepath.IsAbs(cfg.Repository.Source) {
-		cfg.Repository.Source = filepath.Join(wd, cfg.Repository.Source)
-	}
-	cachePath := cfg.Repository.CachePath
-	if !filepath.IsAbs(cachePath) {
-		cachePath = filepath.Join(wd, cachePath)
-	}
+	paths := uiconfig.ResolveRuntimePaths(wd, cfg)
+	cfg.Repository.Source = paths.RepositorySource
 	store, err := gitutil.NewBareRepositoryStore(
 		cfg.Repository.Source,
-		cachePath,
+		paths.CachePath,
 		uiconfig.DefaultFetchDepth,
 		[]string{uiconfig.DefaultTasksSparsePath},
 		cfg.Repository.Auth,
@@ -199,15 +201,9 @@ func (a *App) loadUIContext(repoPath string, configPath string) (gitutil.Reposit
 	if !isRemoteSource(cfg.Repository.Source) {
 		basePath = cfg.Repository.Source
 	}
-
-	historyDir := cfg.Storage.HistoryDir
-	if !filepath.IsAbs(historyDir) {
-		if isRemoteSource(cfg.Repository.Source) {
-			stagingRoot := filepath.Dir(filepath.Dir(cachePath))
-			historyDir = filepath.Join(stagingRoot, historyDir)
-		} else {
-			historyDir = filepath.Join(basePath, historyDir)
-		}
+	historyDir := paths.HistoryDir
+	if historyDir == "" {
+		historyDir = filepath.Join(basePath, cfg.Storage.HistoryDir)
 	}
 
 	return store, cfg, historyDir, nil
@@ -240,9 +236,9 @@ func newHistoryStore(ctx context.Context, historyDir string, cfg *uiconfig.UICon
 func newAPITokenServiceWithKind(ctx context.Context, historyDir string, cfg *uiconfig.UIConfig) (*web.APITokenService, string, error) {
 	switch cfg.Auth.APITokens.Store.Backend {
 	case "", "local":
-		path := cfg.Auth.APITokens.Store.LocalPath
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(filepath.Dir(filepath.Dir(historyDir)), path)
+		path := uiconfig.ResolveAPITokenLocalPath(historyDir, cfg.Auth.APITokens.Store.LocalPath)
+		if path == "" {
+			path = cfg.Auth.APITokens.Store.LocalPath
 		}
 		store := web.NewLocalAPITokenStore(path)
 		return web.NewAPITokenService(cfg.Auth.APITokens, store), "*web.LocalAPITokenStore", nil
