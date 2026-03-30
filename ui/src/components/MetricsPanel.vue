@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { MetricsSnapshot } from '../types'
+import type { MetricsSnapshot, SettingsSummary } from '../types'
 import { formatDateTime, formatBytes } from '../formatters'
 
 const props = defineProps<{
   metrics: MetricsSnapshot | null
+  metricsConfig?: SettingsSummary['metrics'] | null
 }>()
 
 const cpuPercent = computed(() => Math.min(Math.max(props.metrics?.cpu.percent ?? 0, 0), 100))
@@ -72,6 +73,7 @@ const storageDonutStyle = computed(() => ({
           <span class="metric-popover-label">CPU</span>
           <strong class="metric-popover-value">{{ cpuPercent.toFixed(1) }}%</strong>
           <span>usage {{ cpuPercent.toFixed(1) }}%</span>
+          <span v-if="props.metricsConfig">refresh every {{ props.metricsConfig.cpuInterval }}s</span>
           <span>sample {{ metrics?.cpu.timestamp ? formatDateTime(metrics.cpu.timestamp) : 'waiting...' }}</span>
         </div>
       </div>
@@ -95,6 +97,7 @@ const storageDonutStyle = computed(() => ({
           <span class="metric-popover-label">Memory</span>
           <strong class="metric-popover-value">{{ memoryPercent.toFixed(1) }}%</strong>
           <span>{{ memoryUsageText }}</span>
+          <span v-if="props.metricsConfig">refresh every {{ props.metricsConfig.memoryInterval }}s</span>
           <span>sample {{ metrics?.memory.current.timestamp ? formatDateTime(metrics.memory.current.timestamp) : 'waiting...' }}</span>
         </div>
       </div>
@@ -123,6 +126,7 @@ const storageDonutStyle = computed(() => ({
           <span>artifacts {{ formatBytes(metrics?.storage.artifactBytes) }}</span>
           <span>worktrees {{ formatBytes(metrics?.storage.worktreeBytes) }}</span>
           <span>free {{ formatBytes(metrics?.storage.freeBytes) }}</span>
+          <span v-if="props.metricsConfig">refresh every {{ props.metricsConfig.storageInterval }}s</span>
         </div>
       </div>
     </div>

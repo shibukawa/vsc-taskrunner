@@ -1,6 +1,10 @@
 package uiconfig
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -227,6 +231,209 @@ func TestCanRunUsesAllowUsers(t *testing.T) {
 	}
 }
 
+func TestGeneratedConfigBuildAndMarshalLocal(t *testing.T) {
+	input := GeneratedConfig{
+		RepositorySource: "/tmp/repo",
+		Branches:         []string{"main"},
+		Port:             9090,
+		Tasks: []GeneratedTask{
+			{Label: "build", ArtifactPath: "dist"},
+			{Label: "test"},
+		},
+		Auth: GeneratedAuth{
+			NoAuth: true,
+		},
+		Storage: GeneratedStorage{
+			Backend:    "local",
+			HistoryDir: ".runtask/history",
+		},
+		MetricsEnabled:  false,
+		MaxParallelRuns: 2,
+	}
+
+	cfg := input.Build()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+	data, err := MarshalGeneratedConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.HasPrefix(text, schemaComment+"\n") {
+		t.Fatalf("generated yaml missing schema comment:\n%s", text)
+	}
+	for _, want := range []string{
+		"source: /tmp/repo",
+		"- main",
+		"build:",
+		"path: dist",
+		"test: {}",
+		"noAuth: true",
+		"backend: local",
+		"historyDir: .runtask/history",
+		"enabled: false",
+		"maxParallelRuns: 2",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("generated yaml missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestGeneratedConfigBuildAndMarshalObjectStorage(t *testing.T) {
+	input := GeneratedConfig{
+		RepositorySource: "/tmp/repo",
+		Port:             8080,
+		Tasks:            []GeneratedTask{{Label: "build"}},
+		Auth: GeneratedAuth{
+			OIDCIssuer:       "https://issuer.example.com",
+			OIDCClientID:     "client-id",
+			OIDCClientSecret: "client-secret",
+		},
+		Storage: GeneratedStorage{
+			Backend:              "object",
+			ObjectEndpoint:       "http://127.0.0.1:9000",
+			ObjectBucket:         "runtask",
+			ObjectRegion:         "us-east-1",
+			ObjectAccessKey:      "access",
+			ObjectSecretKey:      "secret",
+			ObjectPrefix:         "runs",
+			ObjectForcePathStyle: true,
+		},
+		MetricsEnabled:  true,
+		MaxParallelRuns: 4,
+	}
+
+	cfg := input.Build()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+	data, err := MarshalGeneratedConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.HasPrefix(text, schemaComment+"\n") {
+		t.Fatalf("generated yaml missing schema comment:\n%s", text)
+	}
+	for _, want := range []string{
+		"oidcIssuer: https://issuer.example.com",
+		"oidcClientID: client-id",
+		"oidcClientSecret: client-secret",
+		"backend: object",
+		"endpoint: http://127.0.0.1:9000",
+		"bucket: runtask",
+		"region: us-east-1",
+		"accessKey: access",
+		"secretKey: secret",
+		"prefix: runs",
+		"forcePathStyle: true",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("generated yaml missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestGeneratedConfigBuildRejectsIncompleteObjectStorage(t *testing.T) {
+	input := GeneratedConfig{
+		RepositorySource: "/tmp/repo",
+		Port:             8080,
+		Tasks:            []GeneratedTask{{Label: "build"}},
+		Auth: GeneratedAuth{
+			NoAuth: true,
+		},
+		Storage: GeneratedStorage{
+			Backend: "object",
+		},
+		MetricsEnabled:  true,
+		MaxParallelRuns: 4,
+	}
+
+	cfg := input.Build()
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected object storage validation error")
+	}
+}
+
+func TestMarshalConfigPreservesTaskFieldsForEdit(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Auth.NoAuth = true
+	cfg.Tasks = testTasks(
+		AllowedTaskSpec{
+			Pattern: "build",
+			Config: TaskUIConfig{
+				Artifacts:        []ArtifactRuleConfig{{Path: "dist/out"}},
+				PreRunTasks:      []PreRunTaskConfig{{Command: "echo", Args: []string{"prepare"}}},
+				WorktreeDisabled: true,
+			},
+		},
+	)
+
+	data, err := MarshalConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.HasPrefix(text, schemaComment+"\n") {
+		t.Fatalf("generated yaml missing schema comment:\n%s", text)
+	}
+	for _, want := range []string{
+		"build:",
+		"path: dist/out",
+		"preRunTask:",
+		"command: echo",
+		"worktreeDisabled: true",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("generated yaml missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestConfigTaskAndBranchEditors(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Tasks = testTasks(
+		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{}},
+		AllowedTaskSpec{Pattern: "test", Config: TaskUIConfig{}},
+	)
+	cfg.Branches = []string{"main", "dev"}
+
+	cfg.SetTaskConfig("build", TaskUIConfig{
+		Artifacts:        []ArtifactRuleConfig{{Path: "dist"}},
+		WorktreeDisabled: true,
+	})
+	taskCfg, ok := cfg.FindExactTaskConfig("build")
+	if !ok || len(taskCfg.Artifacts) != 1 || taskCfg.Artifacts[0].Path != "dist" || !taskCfg.WorktreeDisabled {
+		t.Fatalf("updated task config = %+v", taskCfg)
+	}
+	if !cfg.RemoveTaskConfig("test") {
+		t.Fatal("expected task removal")
+	}
+	if cfg.RemoveTaskConfig("missing") {
+		t.Fatal("expected missing task removal to be false")
+	}
+
+	if !cfg.AddBranch("release") {
+		t.Fatal("expected branch add")
+	}
+	if cfg.AddBranch("release") {
+		t.Fatal("expected duplicate branch add to fail")
+	}
+	if !cfg.SetDefaultBranch("dev") || cfg.Branches[0] != "dev" {
+		t.Fatalf("branches after set-default = %+v", cfg.Branches)
+	}
+	if !cfg.RemoveBranch("main") {
+		t.Fatal("expected branch removal")
+	}
+	if cfg.RemoveBranch("missing") {
+		t.Fatal("expected missing branch removal to be false")
+	}
+}
+
 func TestValidateRepositoryConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Repository.Source = "https://example.com/demo.git"
@@ -353,5 +560,208 @@ tasks:
 	}
 	if got := cfg.Tasks[0].Pattern; got != "npm-*" {
 		t.Fatalf("first pattern = %q, want npm-*", got)
+	}
+}
+
+func TestPrependSchemaComment(t *testing.T) {
+	got := string(prependSchemaComment([]byte("repository:\n  source: /tmp/repo\n")))
+	if got != schemaComment+"\nrepository:\n  source: /tmp/repo" {
+		t.Fatalf("prependSchemaComment() = %q", got)
+	}
+}
+
+func TestConfigSchemaParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config-schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("schema JSON is invalid: %v", err)
+	}
+	if got := doc["$id"]; got != SchemaURL {
+		t.Fatalf("schema $id = %v, want %q", got, SchemaURL)
+	}
+}
+
+func TestConfigSchemaExamplesMatchGoValidation(t *testing.T) {
+	examples := []string{
+		strings.Join([]string{
+			schemaComment,
+			"repository:",
+			"  source: /srv/repos/demo",
+			"auth:",
+			"  noAuth: true",
+			"tasks:",
+			"  build: {}",
+			"",
+		}, "\n"),
+		strings.Join([]string{
+			schemaComment,
+			"server:",
+			"  publicURL: https://runtask.example.com",
+			"repository:",
+			"  source: https://github.com/acme/demo.git",
+			"  cachePath: /var/lib/runtask/demo-cache.git",
+			"  auth:",
+			"    type: envToken",
+			"    provider: github",
+			"    tokenEnv: GITHUB_FINE_GRAINED_TOKEN",
+			"    repo: acme/demo",
+			"    allowedHosts:",
+			"      - github.com",
+			"      - api.github.com",
+			"auth:",
+			"  oidcIssuer: https://issuer.example.com",
+			"  oidcClientID: runtask",
+			"  oidcClientSecret: ${OIDC_CLIENT_SECRET}",
+			"  sessionSecret: ${SESSION_SECRET}",
+			"  adminUsers:",
+			"    role:",
+			"      - administrator",
+			"  apiTokens:",
+			"    enabled: true",
+			"tasks:",
+			"  deploy: {}",
+			"",
+		}, "\n"),
+		strings.Join([]string{
+			schemaComment,
+			"repository:",
+			"  source: https://gitlab.example.com/group/project.git",
+			"  cachePath: /var/lib/runtask/project-cache.git",
+			"  auth:",
+			"    type: envToken",
+			"    provider: gitlab",
+			"    tokenEnv: GITLAB_TOKEN",
+			"    baseURL: https://gitlab.example.com/api/v4",
+			"    repo: group/project",
+			"    allowedHosts:",
+			"      - gitlab.example.com",
+			"auth:",
+			"  oidcIssuer: https://issuer.example.com",
+			"  oidcClientID: runtask",
+			"  oidcClientSecret: ${OIDC_CLIENT_SECRET}",
+			"tasks:",
+			"  build:",
+			"    artifacts:",
+			"      - path: dist",
+			"        format: zip",
+			"        nameTemplate: frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip",
+			"    preRunTask:",
+			"      - command: npm",
+			"        args:",
+			"          - ci",
+			"        cwd: ${workspaceFolder}",
+			"storage:",
+			"  backend: object",
+			"  object:",
+			"    endpoint: https://s3.example.com",
+			"    bucket: runtask",
+			"    region: us-east-1",
+			"    accessKey: ${S3_ACCESS_KEY}",
+			"    secretKey: ${S3_SECRET_KEY}",
+			"    prefix: runs",
+			"",
+		}, "\n"),
+	}
+
+	for _, example := range examples {
+		cfg := DefaultConfig()
+		if err := yaml.Unmarshal([]byte(example), cfg); err != nil {
+			t.Fatalf("yaml.Unmarshal(example) unexpected error: %v\n%s", err, example)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(example) unexpected error: %v\n%s", err, example)
+		}
+	}
+}
+
+func TestSampleRuntaskUIYAMLMatchesGoValidation(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "runtask-ui.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal(sample) unexpected error: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate(sample) unexpected error: %v", err)
+	}
+}
+
+func TestConfigValidationRejectsSchemaRegressionCases(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "invalid port",
+			data: strings.Join([]string{
+				"repository:",
+				"  source: /tmp/repo",
+				"server:",
+				"  port: 70000",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "invalid storage backend",
+			data: strings.Join([]string{
+				"repository:",
+				"  source: /tmp/repo",
+				"storage:",
+				"  backend: tape",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "empty artifact path",
+			data: strings.Join([]string{
+				"repository:",
+				"  source: /tmp/repo",
+				"tasks:",
+				"  build:",
+				"    artifacts:",
+				"      - path: ''",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "empty preRunTask command",
+			data: strings.Join([]string{
+				"repository:",
+				"  source: /tmp/repo",
+				"tasks:",
+				"  build:",
+				"    preRunTask:",
+				"      - command: ''",
+				"",
+			}, "\n"),
+		},
+		{
+			name: "negative worktree keep",
+			data: strings.Join([]string{
+				"repository:",
+				"  source: /tmp/repo",
+				"storage:",
+				"  worktree:",
+				"    keepOnFailure: -1",
+				"",
+			}, "\n"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			if err := yaml.Unmarshal([]byte(tt.data), cfg); err != nil {
+				t.Fatalf("yaml.Unmarshal() unexpected error: %v", err)
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }

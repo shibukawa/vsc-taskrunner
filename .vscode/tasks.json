@@ -2,25 +2,22 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"args": [
-				"build",
-				"-trimpath",
-				"-ldflags=-s -w",
-				"./..."
-			],
-			"command":      "go",
-			"dependsOn":    "go-build-runtask",
-			"dependsOrder": "parallel",
+			"label":        "go-build",
+			"dependsOn":    ["ui-build", "go-build-runtask"],
+			"dependsOrder": "sequence",
 			"group": {
 				"kind":      "build",
 				"isDefault": true
 			},
-			"label": "go-build",
-			"options": {
-				"cwd": "${workspaceFolder}"
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel":  "dedicated",
+				"group":  "build"
 			},
-			"problemMatcher": "$go",
-			"type":           "process"
+			"runOptions": {
+				"reevaluateOnRerun": true
+			}
 		},
 		{
 			"args": [
@@ -78,6 +75,20 @@
 			},
 			"problemMatcher": "$go",
 			"type":           "shell"
+		},
+		{
+			"label":   "ui-build",
+			"type":    "shell",
+			"command": "npm run build",
+			"options": {
+				"cwd": "${workspaceFolder}/ui"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel":  "dedicated",
+				"group":  "build"
+			}
 		},
 		{
 			"args": [

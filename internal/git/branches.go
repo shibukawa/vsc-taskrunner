@@ -21,6 +21,14 @@ type Branch struct {
 	CommitDate time.Time `json:"commitDate"`
 }
 
+func CurrentBranch(repoRoot string) (string, error) {
+	out, err := runGit(repoRoot, "branch", "--show-current")
+	if err != nil {
+		return "", fmt.Errorf("read current branch: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // ReadHeadCommit returns the checked-out HEAD commit hash and commit date for a local worktree.
 func ReadHeadCommit(repoRoot string) (string, time.Time, error) {
 	out, err := runGit(repoRoot, "show", "-s", "--format=%H\t%cI", "HEAD")

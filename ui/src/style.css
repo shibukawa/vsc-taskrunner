@@ -317,6 +317,10 @@ button:disabled {
   overflow-y: auto;
 }
 
+.settings-dialog {
+  width: min(820px, calc(100vw - 32px));
+}
+
 .run-dialog-fields {
   display: grid;
   gap: 12px;
@@ -417,6 +421,33 @@ button:disabled {
   gap: 12px;
 }
 
+.settings-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-section {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr);
+  gap: 8px 12px;
+}
+
+.settings-list dt {
+  color: var(--muted);
+}
+
+.settings-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .token-error {
   margin: 0;
 }
@@ -429,6 +460,11 @@ button:disabled {
   }
 
   .token-endpoint-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid,
+  .settings-list {
     grid-template-columns: 1fr;
   }
 }

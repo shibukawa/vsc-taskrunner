@@ -1,0 +1,626 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json",
+  "title": "runtask-ui.yaml",
+  "description": "Schema for runtask Web UI configuration. This schema provides editor completion and structural validation, but Go-side validation remains the final authority for cross-field rules such as local vs remote repository behavior.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repository"
+  ],
+  "properties": {
+    "server": {
+      "$ref": "#/$defs/serverConfig"
+    },
+    "repository": {
+      "$ref": "#/$defs/repositoryConfig"
+    },
+    "auth": {
+      "$ref": "#/$defs/authConfig"
+    },
+    "branches": {
+      "type": "array",
+      "description": "Allowed branch patterns. When omitted or empty, only top-level local branches are allowed.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "examples": [
+        [
+          "main",
+          "release/*",
+          "feature/*"
+        ]
+      ]
+    },
+    "tasks": {
+      "type": "object",
+      "description": "Task UI settings keyed by task-label glob pattern. Patterns are checked in declaration order and the first match wins.",
+      "default": {},
+      "patternProperties": {
+        "^.+$": {
+          "$ref": "#/$defs/taskUIConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "$ref": "#/$defs/executionConfig"
+    },
+    "metrics": {
+      "$ref": "#/$defs/metricsConfig"
+    },
+    "logging": {
+      "$ref": "#/$defs/loggingConfig"
+    },
+    "storage": {
+      "$ref": "#/$defs/storageConfig"
+    }
+  },
+  "examples": [
+    {
+      "repository": {
+        "source": "/srv/repos/demo"
+      },
+      "auth": {
+        "noAuth": true
+      },
+      "tasks": {
+        "build": {}
+      }
+    },
+    {
+      "server": {
+        "publicURL": "https://runtask.example.com"
+      },
+      "repository": {
+        "source": "https://github.com/acme/demo.git",
+        "cachePath": "/var/lib/runtask/demo-cache.git",
+        "auth": {
+          "type": "envToken",
+          "provider": "github",
+          "tokenEnv": "GITHUB_FINE_GRAINED_TOKEN",
+          "repo": "acme/demo",
+          "allowedHosts": [
+            "github.com",
+            "api.github.com"
+          ]
+        }
+      },
+      "auth": {
+        "oidcIssuer": "https://issuer.example.com",
+        "oidcClientID": "runtask",
+        "oidcClientSecret": "${OIDC_CLIENT_SECRET}",
+        "sessionSecret": "${SESSION_SECRET}",
+        "adminUsers": {
+          "role": [
+            "administrator"
+          ]
+        },
+        "apiTokens": {
+          "enabled": true
+        }
+      },
+      "branches": [
+        "main",
+        "release/*"
+      ],
+      "tasks": {
+        "deploy": {}
+      }
+    },
+    {
+      "repository": {
+        "source": "https://gitlab.example.com/group/project.git",
+        "cachePath": "/var/lib/runtask/project-cache.git",
+        "auth": {
+          "type": "envToken",
+          "provider": "gitlab",
+          "tokenEnv": "GITLAB_TOKEN",
+          "baseURL": "https://gitlab.example.com/api/v4",
+          "repo": "group/project",
+          "allowedHosts": [
+            "gitlab.example.com"
+          ]
+        }
+      },
+      "auth": {
+        "oidcIssuer": "https://issuer.example.com",
+        "oidcClientID": "runtask",
+        "oidcClientSecret": "${OIDC_CLIENT_SECRET}"
+      },
+      "tasks": {
+        "build": {
+          "artifacts": [
+            {
+              "path": "dist",
+              "format": "zip",
+              "nameTemplate": "frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip"
+            }
+          ],
+          "preRunTask": [
+            {
+              "command": "npm",
+              "args": [
+                "ci"
+              ],
+              "cwd": "${workspaceFolder}"
+            }
+          ]
+        }
+      },
+      "storage": {
+        "backend": "object",
+        "object": {
+          "endpoint": "https://s3.example.com",
+          "bucket": "runtask",
+          "region": "us-east-1",
+          "accessKey": "${S3_ACCESS_KEY}",
+          "secretKey": "${S3_SECRET_KEY}",
+          "prefix": "runs",
+          "forcePathStyle": false
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "serverConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "HTTP listen host.",
+          "default": "localhost"
+        },
+        "port": {
+          "type": "integer",
+          "description": "HTTP listen port. Go validation requires 1-65535.",
+          "default": 8080,
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "publicURL": {
+          "type": "string",
+          "description": "Absolute public http(s) URL used for external links and OIDC callback generation.",
+          "format": "uri"
+        }
+      }
+    },
+    "repositoryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Local Git repository path or remote repository URL."
+        },
+        "localPath": {
+          "type": "string",
+          "description": "Optional local clone path for remote repositories."
+        },
+        "cachePath": {
+          "type": "string",
+          "description": "Repository cache path. Required by Go validation when source is remote."
+        },
+        "auth": {
+          "$ref": "#/$defs/repositoryAuthConfig"
+        }
+      }
+    },
+    "repositoryAuthConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "envToken"
+          ],
+          "description": "Remote repository authentication type."
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "github",
+            "gitlab",
+            "bitbucket"
+          ],
+          "description": "Token validation provider."
+        },
+        "tokenEnv": {
+          "type": "string",
+          "description": "Environment variable containing the repository token."
+        },
+        "baseURL": {
+          "type": "string",
+          "description": "Provider API base URL, typically used for self-managed GitLab.",
+          "format": "uri"
+        },
+        "repo": {
+          "type": "string",
+          "description": "Allowed repository identifier such as owner/repo or group/project."
+        },
+        "allowedHosts": {
+          "type": "array",
+          "description": "Allowlist for remote and API hosts.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejectBroadScope": {
+          "type": "boolean",
+          "description": "Reject tokens that can read beyond the target repository.",
+          "default": true
+        },
+        "requireReadOnly": {
+          "type": "boolean",
+          "description": "Reject tokens with write/admin capability.",
+          "default": true
+        }
+      }
+    },
+    "authConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "oidcIssuer": {
+          "type": "string",
+          "description": "OIDC issuer URL.",
+          "format": "uri"
+        },
+        "oidcClientID": {
+          "type": "string",
+          "description": "OIDC client ID."
+        },
+        "oidcClientSecret": {
+          "type": "string",
+          "description": "OIDC client secret."
+        },
+        "noAuth": {
+          "type": "boolean",
+          "description": "Disable authentication entirely.",
+          "default": false
+        },
+        "sessionSecret": {
+          "type": "string",
+          "description": "Session cookie signing secret."
+        },
+        "allowUsers": {
+          "$ref": "#/$defs/userAccessRules"
+        },
+        "adminUsers": {
+          "$ref": "#/$defs/userAccessRules"
+        },
+        "apiTokens": {
+          "$ref": "#/$defs/apiTokenConfig"
+        }
+      }
+    },
+    "userAccessRules": {
+      "type": "object",
+      "description": "Mapping from OIDC claim name to a glob string or a list of glob strings.",
+      "default": {},
+      "patternProperties": {
+        "^.+$": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "apiTokenConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable API token issuance for admin users. Go validation also requires auth.noAuth=false."
+        },
+        "defaultTTLHours": {
+          "type": "integer",
+          "default": 720,
+          "minimum": 1
+        },
+        "maxPerUser": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1
+        },
+        "store": {
+          "$ref": "#/$defs/apiTokenStoreConfig"
+        }
+      }
+    },
+    "apiTokenStoreConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": [
+            "local",
+            "object"
+          ],
+          "default": "local"
+        },
+        "localPath": {
+          "type": "string",
+          "default": ".runtask/api-tokens.json"
+        },
+        "object": {
+          "$ref": "#/$defs/objectStorageConfig"
+        }
+      }
+    },
+    "taskUIConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactRuleConfig"
+          }
+        },
+        "preRunTask": {
+          "type": "array",
+          "description": "Commands run once before the selected parent task. They are logged in the combined log and are not stored as child tasks.",
+          "items": {
+            "$ref": "#/$defs/preRunTaskConfig"
+          }
+        },
+        "worktreeDisabled": {
+          "type": "boolean",
+          "description": "Run with the sparse tasks-only workspace instead of the full worktree.",
+          "default": false
+        }
+      }
+    },
+    "artifactRuleConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path or glob to collect after a run."
+        },
+        "nameTemplate": {
+          "type": "string",
+          "default": "artifacts.zip",
+          "description": "Archive name template used only when format=zip."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "zip",
+            "file"
+          ],
+          "default": "zip"
+        }
+      }
+    },
+    "preRunTaskConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "shell": {
+          "$ref": "#/$defs/shellConfig"
+        }
+      }
+    },
+    "shellConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable"
+      ],
+      "properties": {
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "executionConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxParallelRuns": {
+          "type": "integer",
+          "description": "Maximum number of parent runs executing at once. 0 means unlimited.",
+          "default": 4,
+          "minimum": 0
+        }
+      }
+    },
+    "metricsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "cpuInterval": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1
+        },
+        "memoryInterval": {
+          "type": "integer",
+          "default": 15,
+          "minimum": 1
+        },
+        "storageInterval": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 1
+        },
+        "memoryHistoryWindow": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 1
+        }
+      }
+    },
+    "loggingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "redaction": {
+          "$ref": "#/$defs/redactionConfig"
+        }
+      }
+    },
+    "redactionConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "storageConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "historyDir": {
+          "type": "string",
+          "default": ".runtask/history"
+        },
+        "historyKeepCount": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "local",
+            "object"
+          ],
+          "default": "local"
+        },
+        "object": {
+          "$ref": "#/$defs/objectStorageConfig"
+        },
+        "worktree": {
+          "$ref": "#/$defs/worktreeConfig"
+        }
+      }
+    },
+    "objectStorageConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "bucket"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "region": {
+          "type": "string",
+          "default": "us-east-1"
+        },
+        "accessKey": {
+          "type": "string"
+        },
+        "secretKey": {
+          "type": "string"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "forcePathStyle": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "worktreeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keepOnSuccess": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "keepOnFailure": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -95,21 +95,34 @@ type RepositoryAuthConfig struct {
 
 type AllowedTaskSpecs []AllowedTaskSpec
 
+func (s AllowedTaskSpecs) MarshalYAML() (interface{}, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	for _, spec := range s {
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: spec.Pattern})
+		valueNode := &yaml.Node{}
+		if err := valueNode.Encode(spec.Config); err != nil {
+			return nil, err
+		}
+		node.Content = append(node.Content, valueNode)
+	}
+	return node, nil
+}
+
 type AllowedTaskSpec struct {
 	Pattern string
 	Config  TaskUIConfig
 }
 
 type TaskUIConfig struct {
-	Artifacts        []ArtifactRuleConfig `yaml:"artifacts"`
-	PreRunTasks      []PreRunTaskConfig   `yaml:"preRunTask"`
-	WorktreeDisabled bool                 `yaml:"worktreeDisabled"`
+	Artifacts        []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
+	PreRunTasks      []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
+	WorktreeDisabled bool                 `yaml:"worktreeDisabled,omitempty"`
 }
 
 type ArtifactRuleConfig struct {
 	Path         string `yaml:"path"`
-	NameTemplate string `yaml:"nameTemplate"`
-	Format       string `yaml:"format"`
+	NameTemplate string `yaml:"nameTemplate,omitempty"`
+	Format       string `yaml:"format,omitempty"`
 }
 
 type UserAccessRule struct {
@@ -118,6 +131,35 @@ type UserAccessRule struct {
 }
 
 type UserAccessRules []UserAccessRule
+
+func (r UserAccessRules) MarshalYAML() (interface{}, error) {
+	if len(r) == 0 {
+		return nil, nil
+	}
+	grouped := make(map[string][]string)
+	order := make([]string, 0, len(r))
+	for _, rule := range r {
+		if _, ok := grouped[rule.Claim]; !ok {
+			order = append(order, rule.Claim)
+		}
+		grouped[rule.Claim] = append(grouped[rule.Claim], rule.Value)
+	}
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	for _, claim := range order {
+		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: claim})
+		values := grouped[claim]
+		if len(values) == 1 {
+			node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: values[0]})
+			continue
+		}
+		valueNode := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, value := range values {
+			valueNode.Content = append(valueNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: value})
+		}
+		node.Content = append(node.Content, valueNode)
+	}
+	return node, nil
+}
 
 func (r *UserAccessRules) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
@@ -191,15 +233,15 @@ type MetricsConfig struct {
 
 type PreRunTaskConfig struct {
 	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	CWD     string            `yaml:"cwd"`
-	Env     map[string]string `yaml:"env"`
-	Shell   *ShellConfig      `yaml:"shell"`
+	Args    []string          `yaml:"args,omitempty"`
+	CWD     string            `yaml:"cwd,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Shell   *ShellConfig      `yaml:"shell,omitempty"`
 }
 
 type ShellConfig struct {
 	Executable string   `yaml:"executable"`
-	Args       []string `yaml:"args"`
+	Args       []string `yaml:"args,omitempty"`
 }
 
 type StorageConfig struct {
