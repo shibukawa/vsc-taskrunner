@@ -114,15 +114,15 @@ type AllowedTaskSpec struct {
 }
 
 type TaskUIConfig struct {
-	Artifacts        []ArtifactRuleConfig `yaml:"artifacts"`
-	PreRunTasks      []PreRunTaskConfig   `yaml:"preRunTask"`
-	WorktreeDisabled bool                 `yaml:"worktreeDisabled"`
+	Artifacts        []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
+	PreRunTasks      []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
+	WorktreeDisabled bool                 `yaml:"worktreeDisabled,omitempty"`
 }
 
 type ArtifactRuleConfig struct {
 	Path         string `yaml:"path"`
-	NameTemplate string `yaml:"nameTemplate"`
-	Format       string `yaml:"format"`
+	NameTemplate string `yaml:"nameTemplate,omitempty"`
+	Format       string `yaml:"format,omitempty"`
 }
 
 type UserAccessRule struct {
@@ -233,15 +233,15 @@ type MetricsConfig struct {
 
 type PreRunTaskConfig struct {
 	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	CWD     string            `yaml:"cwd"`
-	Env     map[string]string `yaml:"env"`
-	Shell   *ShellConfig      `yaml:"shell"`
+	Args    []string          `yaml:"args,omitempty"`
+	CWD     string            `yaml:"cwd,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Shell   *ShellConfig      `yaml:"shell,omitempty"`
 }
 
 type ShellConfig struct {
 	Executable string   `yaml:"executable"`
-	Args       []string `yaml:"args"`
+	Args       []string `yaml:"args,omitempty"`
 }
 
 type StorageConfig struct {

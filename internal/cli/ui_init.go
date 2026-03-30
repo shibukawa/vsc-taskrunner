@@ -11,10 +11,11 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/term"
 	gitutil "vsc-taskrunner/internal/git"
 	"vsc-taskrunner/internal/tasks"
 	"vsc-taskrunner/internal/uiconfig"
+
+	"golang.org/x/term"
 )
 
 func (a *App) runUIInit(args []string) int {
@@ -51,11 +52,15 @@ func (a *App) runUIInit(args []string) int {
 		configPath = filepath.Join(repoRoot, "runtask-ui.yaml")
 	}
 
+	promptWriter := a.stdout
+	if !write {
+		promptWriter = a.stderr
+	}
 	prompt := uiInitPrompter{
 		reader:     bufio.NewReader(a.stdin),
-		writer:     a.stdout,
+		writer:     promptWriter,
 		inputFile:  readerFile(a.stdin),
-		outputFile: writerFile(a.stdout),
+		outputFile: writerFile(promptWriter),
 	}
 	input, err := prompt.collect(repoRoot)
 	if err != nil {
@@ -120,6 +125,7 @@ func (p uiInitPrompter) collect(repoRoot string) (uiconfig.GeneratedConfig, erro
 
 	cfg := uiconfig.GeneratedConfig{
 		RepositorySource: repoRoot,
+		Host:             uiconfig.DefaultConfig().Server.Host,
 		Port:             uiconfig.DefaultConfig().Server.Port,
 		Storage: uiconfig.GeneratedStorage{
 			Backend:    uiconfig.DefaultConfig().Storage.Backend,
@@ -135,10 +141,19 @@ func (p uiInitPrompter) collect(repoRoot string) (uiconfig.GeneratedConfig, erro
 	}
 	cfg.RepositorySource = repositorySource
 
+	host, err := promptLine(p.reader, p.writer, "Server host", cfg.Host)
+	if err != nil {
+		return uiconfig.GeneratedConfig{}, err
+	}
+	cfg.Host = host
+
 	if len(branchOptions) > 0 {
-		selectedBranches, err := promptBranches(p.reader, p.writer, p.inputFile, p.outputFile, branchOptions, branchDefaults)
-		if err != nil {
-			return uiconfig.GeneratedConfig{}, err
+		selectedBranches := append([]string(nil), branchOptions...)
+		if len(branchOptions) > 1 {
+			selectedBranches, err = promptBranches(p.reader, p.writer, p.inputFile, p.outputFile, branchOptions, branchDefaults)
+			if err != nil {
+				return uiconfig.GeneratedConfig{}, err
+			}
 		}
 		if len(selectedBranches) > 0 {
 			defaultBranch, err := promptSelectedBranch(p.reader, p.writer, selectedBranches, currentBranch)
@@ -148,16 +163,6 @@ func (p uiInitPrompter) collect(repoRoot string) (uiconfig.GeneratedConfig, erro
 			cfg.Branches = reorderSelectedFirst(selectedBranches, defaultBranch)
 		}
 	}
-
-	portText, err := promptLine(p.reader, p.writer, "Server port", strconv.Itoa(cfg.Port))
-	if err != nil {
-		return uiconfig.GeneratedConfig{}, err
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		return uiconfig.GeneratedConfig{}, fmt.Errorf("invalid port %q", portText)
-	}
-	cfg.Port = port
 
 	selectedTasks, err := promptTasks(p.reader, p.writer, p.inputFile, p.outputFile, taskOptions, taskOptions, false)
 	if err != nil {
@@ -261,6 +266,9 @@ func resolveUIInitRepoRoot(wd string, repoPath string) (string, error) {
 	target := wd
 	if repoPath != "" {
 		target = repoPath
+	}
+	if _, err := os.Stat(filepath.Join(target, ".git")); err == nil {
+		return filepath.Clean(target), nil
 	}
 	repoRoot, err := gitutil.FindRepoRoot(target)
 	if err != nil {

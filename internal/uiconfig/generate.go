@@ -13,6 +13,7 @@ const schemaComment = "# yaml-language-server: $schema=" + SchemaURL
 
 type GeneratedConfig struct {
 	RepositorySource string
+	Host             string
 	Branches         []string
 	Port             int
 	Tasks            []GeneratedTask
@@ -51,6 +52,9 @@ type GeneratedStorage struct {
 func (g GeneratedConfig) Build() *UIConfig {
 	cfg := DefaultConfig()
 	cfg.Repository.Source = g.RepositorySource
+	if g.Host != "" {
+		cfg.Server.Host = g.Host
+	}
 	cfg.Server.Port = g.Port
 	cfg.Branches = append([]string(nil), g.Branches...)
 	cfg.Tasks = make(AllowedTaskSpecs, 0, len(g.Tasks))
