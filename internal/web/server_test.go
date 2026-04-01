@@ -167,7 +167,7 @@ func TestHandleBranchesPreloadsTasksAndCommitDate(t *testing.T) {
 			Worktree           *struct {
 				Disabled bool `json:"disabled"`
 			} `json:"worktree"`
-			PreRunTasks        []struct {
+			PreRunTasks []struct {
 				Command string   `json:"command"`
 				Args    []string `json:"args"`
 				CWD     string   `json:"cwd"`

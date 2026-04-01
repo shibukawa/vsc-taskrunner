@@ -14,12 +14,14 @@ func testTasks(specs ...AllowedTaskSpec) AllowedTaskSpecs {
 	return AllowedTaskSpecs(specs)
 }
 
+//go:fix inline
 func boolPtr(value bool) *bool {
-	return &value
+	return new(value)
 }
 
+//go:fix inline
 func intPtr(value int) *int {
-	return &value
+	return new(value)
 }
 
 func TestTasksArtifactRulesUnmarshal(t *testing.T) {
@@ -114,7 +116,7 @@ func TestMatchTask(t *testing.T) {
 func TestTaskConfigUsesFirstMatchingPattern(t *testing.T) {
 	cfg := &UIConfig{Tasks: testTasks(
 		AllowedTaskSpec{Pattern: "npm-*", Config: TaskUIConfig{Artifacts: []ArtifactRuleConfig{{Path: "dist/*", Format: "file"}}}},
-		AllowedTaskSpec{Pattern: "*", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{Disabled: boolPtr(true)}}},
+		AllowedTaskSpec{Pattern: "*", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{Disabled: new(true)}}},
 	)}
 	taskCfg, ok := cfg.TaskConfig("npm-build")
 	if !ok {
@@ -375,7 +377,7 @@ func TestMarshalConfigPreservesTaskFieldsForEdit(t *testing.T) {
 			Config: TaskUIConfig{
 				Artifacts:   []ArtifactRuleConfig{{Path: "dist/out"}},
 				PreRunTasks: []PreRunTaskConfig{{Command: "echo", Args: []string{"prepare"}}},
-				Worktree:    &TaskWorktreeConfig{Disabled: boolPtr(true)},
+				Worktree:    &TaskWorktreeConfig{Disabled: new(true)},
 			},
 		},
 	)
@@ -413,7 +415,7 @@ func TestConfigTaskAndBranchEditors(t *testing.T) {
 
 	cfg.SetTaskConfig("build", TaskUIConfig{
 		Artifacts: []ArtifactRuleConfig{{Path: "dist"}},
-		Worktree:  &TaskWorktreeConfig{Disabled: boolPtr(true)},
+		Worktree:  &TaskWorktreeConfig{Disabled: new(true)},
 	})
 	taskCfg, ok := cfg.FindExactTaskConfig("build")
 	if !ok || len(taskCfg.Artifacts) != 1 || taskCfg.Artifacts[0].Path != "dist" || taskCfg.Worktree == nil || taskCfg.Worktree.Disabled == nil || !*taskCfg.Worktree.Disabled {
@@ -524,7 +526,7 @@ func TestMatchingPreRunTasks(t *testing.T) {
 
 func TestUseSparseRunWorkspace(t *testing.T) {
 	cfg := &UIConfig{Tasks: testTasks(
-		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{Disabled: boolPtr(true)}}},
+		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{Disabled: new(true)}}},
 		AllowedTaskSpec{Pattern: "lint", Config: TaskUIConfig{}},
 	)}
 	if !cfg.UseSparseRunWorkspace("build") {
@@ -571,8 +573,8 @@ func TestWorktreeRetentionForUsesPerFieldOverrides(t *testing.T) {
 	cfg.Storage.Worktree.KeepOnSuccess = 2
 	cfg.Storage.Worktree.KeepOnFailure = 4
 	cfg.Tasks = testTasks(
-		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{Disabled: boolPtr(true)}}},
-		AllowedTaskSpec{Pattern: "test", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{KeepOnFailure: intPtr(9)}}},
+		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{Disabled: new(true)}}},
+		AllowedTaskSpec{Pattern: "test", Config: TaskUIConfig{Worktree: &TaskWorktreeConfig{KeepOnFailure: new(9)}}},
 	)
 
 	if gotSuccess, gotFailure := cfg.WorktreeRetentionFor("build"); gotSuccess != 2 || gotFailure != 4 {

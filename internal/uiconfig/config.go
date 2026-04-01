@@ -115,8 +115,8 @@ type AllowedTaskSpec struct {
 }
 
 type TaskUIConfig struct {
-	Artifacts        []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
-	PreRunTasks      []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
+	Artifacts   []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
+	PreRunTasks []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
 	// Per-task overrides. If nil/empty the global storage settings are used.
 	HistoryKeepCount *int                `yaml:"historyKeepCount,omitempty"`
 	Worktree         *TaskWorktreeConfig `yaml:"worktree,omitempty"`
