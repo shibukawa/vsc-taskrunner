@@ -1,70 +1,70 @@
 # runtask
 
-VS Code の tasks.json 互換を目指した CLI です。`tasks.json` を読み込み、task の一覧表示、dry-run、実行、追加を行います。
+runtask は、VS Codeの`.vscode/tasks.json`をVS Code の外から扱うためのツールです。既存の`.vscode/tasks.json`をCLIから実行できるだけでなく、`.vscode/tasks.json`の作成支援と、ブラウザからtask を実行できるWebUIモードを提供します。
 
-現状は以下の 2 系統を扱います。
+![screenshot](docs/screenshot.png)
 
-- custom task: `shell` / `process`
-- provider-like task: `npm` / `typescript` / `gulp` / `grunt` / `jake`
+## tasks.jsonの実行機能
 
-provider-like task は保存時には VS Code 互換の definition を維持し、実行時に concrete command へ resolve されます。
+- `.vscode/tasks.json`に定義されたタスクの一覧表示
+- タスクの dry-run
+- タスクの実行(inputの追加パラメータ、並行実行・逐次実行も含む、依存タスクを含む実行)
 
-## Background Attribution
+> [!NOTE]
+> 単一ワークスペースのみ対応しています
+> - `command:*`、`config:*`、`file*` 系の variable には未対応です
+> - provider-like taskは事前に明示的なコマンド定義に変換しておく必要があります
 
-Copyright (c) 2024 by glitchworker (https://codepen.io/glitchworker/pen/jENZGOV)
-Released under the MIT license
-https://opensource.org/licenses/mit-license.php
+### 基本的な使い方
 
-## 基本動作
-
-Web UI 用の `taskrun-ui.yaml` では、`runtask ui init` / `runtask ui edit task` / `runtask ui edit branch` は基本設定に限定しています。複雑な UI config は直接 YAML を編集し、次の補助資産を使う前提です。
-
-- `config-schema.json`: エディタ補完と構文検査
-- `llms.txt`: 生成 AI 向けガイド
-- `.codex/skills/taskrun-ui-config/SKILL.md`: Codex 向け手順
-
-実装上の最終判定は Go 側 validation、editor support は schema、AI support は `llms.txt` / skill が担当します。
-
-### task 一覧
+task 一覧:
 
 ```sh
 runtask list
 runtask list --json
 ```
 
-`list --json` では task の `group` に加えて、`workspaceRoot` / `taskFilePath` / `sourceTaskId` も確認できます。
-
-### task の dry-run
+dry-run:
 
 ```sh
+# npm-test は task label
 runtask npm-test --dry-run
 ```
 
-`--dry-run` のテキスト出力でも `group` を表示します。`run --json --dry-run` では resolved task に `workspaceRoot` / `taskFilePath` / `sourceTaskId` を含めます。
-
-### task の実行
+タスク実行:
 
 ```sh
 runtask go-test
 runtask tsc-build-tsconfig.json
 ```
 
-### task の追加
+`runtask run <task-name>` 形式でも実行できますが、通常は `runtask <task-name>` の短い書き方で使えます。依存関係がある task は、`dependsOn` の定義に従ってあわせて実行されます。
 
-対話式の custom task 追加:
+## tasks.json作成支援
+
+VSCodeではタスク定義を行わなくても、拡張機能がプロジェクトの構成を見てコマンド実行の推測を行います。
+このツールは拡張機能には対応していませんが、いくつかの言語やビルドツールの設定を読み込んで、`.vscode/tasks.json`のコマンドとして登録する支援機能を提供しています。
+
+プロジェクトの雛形型できた段階でこの機能を使って登録しておくことで、VSCode上のデバッグなどもしやすくなります。
+
+### `runtask add` でタスクを追加する
+
+`runtask add` は、手書きせずに `.vscode/tasks.json` へ task を追加するための補助コマンドです。まずは対話式でカスタムタスクを作るか、既存プロジェクトから検出して保存する使い方が中心になります。
+
+対話式の追加:
 
 ```sh
 runtask add
 ```
 
-detect 結果の確認:
+検出結果の確認:
 
 ```sh
 runtask add detect
 runtask add detect --json
 ```
 
-detect 結果の保存:
+検出結果の保存:
 
 ```sh
 runtask add detect --save --ecosystem npm
@@ -72,216 +72,205 @@ runtask add detect --save --label npm-test
 runtask add detect --save --ecosystem gulp --all
 ```
 
-## add コマンド
+### 対応している追加支援
 
-### npm
+現在は次のエコシステムに対応しています。
+
+- provider-like task: `npm` / `typescript` / `gulp` / `grunt` / `jake`
+- 生成系 task: `go` / `rust` / `swift` / `gradle` / `maven`
+
+よく使う例:
 
 ```sh
+# npm scripts をまとめて追加
 runtask add npm --all
-runtask add npm --task test
-runtask add npm --path web --task build,test
-```
 
-- `package.json` を検出します
-- 保存形式は `type: npm` と `script` です
-- 実行時は lockfile と `packageManager` を見て `npm` / `yarn` / `pnpm` を解決します
-- 候補に含める script 名は `pre` / `post` で始まるもの、または `:` を含まないものに限定します
-
-### typescript
-
-```sh
-runtask add typescript
+# TypeScript 用の build / watch task を追加
 runtask add typescript --all
-runtask add typescript --tsconfig packages/app/tsconfig.json --task build,watch
-```
 
-- `tsconfig*.json` を検出します
-- 引数なしでは `build` を追加します
-- `--all` では各 tsconfig について `build` と `watch` を追加します
-- workspace root の `package.json` に `build` または `watch` script がある場合、同名の TypeScript task は追加しません
-- `build` には `group: build` を付けます
-- 実行時は `$tsc` / `$tsc-watch` を自動設定します
-
-### gulp / grunt / jake
-
-```sh
-runtask add gulp --all
-runtask add grunt --task build
-runtask add jake --file tools/Jakefile --all
-```
-
-- 対応ファイルを検出します
-  - gulp: `gulpfile.js`, `gulpfile.cjs`, `gulpfile.mjs`, `gulpfile.ts`
-  - grunt: `Gruntfile.js`, `Gruntfile.cjs`, `Gruntfile.mjs`, `Gruntfile.ts`
-  - jake: `Jakefile`, `Jakefile.js`, `Jakefile.cjs`, `Jakefile.mjs`, `Jakefile.ts`
-- task 名はファイルから簡易抽出します
-  - gulp: `gulp.task('name', ...)`
-  - grunt: `grunt.registerTask('name', ...)`
-  - jake: `task('name', ...)`
-- 保存形式は provider-like task definition です
-
-### go / rust / swift / gradle / maven
-
-```sh
+# Go 用の build / test / bench / cover / lint を追加
 runtask add go
-runtask add rust --path crates/core --task test
-runtask add gradle --all
-runtask add maven --path server
-```
 
-- これらは provider type ではなく `process` task を生成します
-- 引数なしでは、Go は `build` / `test` / `bench` / `cover` / `lint` を、Rust は `build` / `test` / `check` / `bench` を、Swift は `build` / `test` / `clean` / `run` を、Gradle/Maven は `build` / `test` / `clean` / `lint` を追加します
-- `build` / `watch` には `group: build`、`test` には `group: test` を付けます
-- `options.cwd` は検出された project root に設定します
-- rust, swift, gradle, maven には基本的な built-in matcher を既定付与します
-- rust / gradle / maven は複数 matcher を配列で既定設定し、panic 系や Kotlin compiler 系の代表的な出力も拾います
-- Go の既定引数は build が `go build -trimpath -ldflags=-s -w ./...`、test が `go test -v ./...`、bench が `go test -run=^$ -bench=. -benchmem ./...`、cover が `go test -coverprofile=coverage.out ./...`、lint が `gofmt -l -w . && go vet ./...` です
-
-## サポート状況
-
-| Ecosystem | Detect | Add | Saved form | Run | Default matcher | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| shell/process | なし | 対話式のみ | shell/process | 対応 | 明示時のみ | custom task |
-| npm | 対応 | 対応 | provider-like | 対応 | なし | script 単位、`--all` 対応。候補は `pre*` / `post*` または `:` を含まない名前 |
-| typescript | 対応 | 対応 | provider-like | 対応 | `$tsc`, `$tsc-watch` | workspace root の npm scripts に同名が無い場合のみ `build/watch` を生成 |
-| gulp | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
-| grunt | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
-| jake | 対応 | 対応 | provider-like | 対応 | なし | task 名をファイルから簡易抽出 |
-| go | 対応 | 対応 | process/shell | 対応 | `$go` | `go build -trimpath -ldflags=-s -w ./...`, `go test -v ./...`, `go test -run=^$ -bench=. -benchmem ./...`, `go test -coverprofile=coverage.out ./...`, `gofmt -l -w . && go vet ./...` |
-| rust | 対応 | 対応 | process | 対応 | `$cargo`, `$cargo-panic` | `cargo build`, `cargo test`, `cargo check`, `cargo bench` |
-| swift | 対応 | 対応 | process | 対応 | `$swift` | `swift build`, `swift test`, `swift package clean`, `swift run` |
-| gradle | 対応 | 対応 | process | 対応 | `$gradle`, `$gradle-kotlin` | `gradlew` 優先。`build`, `test`, `clean`, `lint` を公開 |
-| maven | 対応 | 対応 | process | 対応 | `$maven`, `$maven-kotlin` | `mvnw` 優先。`build`, `test`, `clean`, `lint` を公開 |
-
-## 互換性の前提
-
-- 単一 workspace 前提です
-- `command:*`, `config:*`, `file*` 系 variable は未対応です
-- auto-detect は VS Code の常駐 provider ではなく、CLI 実行時の one-shot scan です
-- provider-like task の `provideTasks` を完全再現しているわけではなく、CLI から保存するための検出を提供しています
-- `gulp` / `grunt` / `jake` の task 抽出は静的な簡易検出です。動的定義や高度な JS 実行は対象外です
-- `cargo` / `swift` / `gradle` / `maven` の matcher は代表的な出力形式を対象にした基本実装です。可能な範囲で line / column / code を抽出しますが、ツールチェインやプラグイン固有の出力差分は今後の拡張対象です
-- Rust は rustc 形式に加えて panic 行を、Gradle/Maven は Java 系に加えて Kotlin compiler 系の典型フォーマットを対象にしています
-
-## 例
-
-React / Node ワークスペースで npm scripts を追加:
-
-```sh
-runtask add npm --all
-runtask npm-test
-```
-
-`lint:fix` のような script は候補から外し、`prebuild` や `postdeploy:prod` は候補に含めます。
-
-TypeScript project の build/watch を追加:
-
-```sh
-runtask add typescript --all
-runtask tsc-watch-tsconfig.json
-```
-
-workspace root の `package.json` に `build` または `watch` script がある場合は、対応する TypeScript task を追加せず、npm script を優先します。
-
-Go project で build/test/bench/cover/lint task を生成:
-
-```sh
-runtask add go
-runtask go-test
-runtask go-bench
-runtask go-cover
-runtask go-lint
-```
-
-Rust project で build/test/check/bench task を生成:
-
-```sh
+# Rust 用の build / test / check / bench を追加
 runtask add rust
-runtask cargo-check
-runtask cargo-bench
 ```
 
-出力例:
+## WebUI モード
 
-```text
-$ runtask add rust
-added 4 tasks to .vscode/tasks.json: cargo-bench, cargo-build, cargo-check, cargo-test
-```
+WebUIモードでは、Gitリポジトリを対象にブラウザ上でブランチやタスクを選んで実行し、履歴や成果物を確認できます。常駐サービスとして使う構成だけでなく、サーバーレス環境での実行も想定しています。
 
-Swift Package project で build/test/clean/run task を生成:
+CLIモードは現在のブランチのワークスペース上にある`.vscode/tasks.json`をその場で実行します。一方、WebUIモードはCI的な環境を想定しています。画面上の設定などは提供していません。
+
+> [!NOTE]
+> git submoduleには対応していません。
+
+### WebUIとCLIの動作の違いについて
+
+* CLIはGit操作をせずに現在のワークの中で動作しますが、WebUIはブランチ選択を行い、そのブランチのHEADをもとにワークスペースを作成してから実行します。
+* CLIはVSCode互換の`.vscode/tasks.json`のみを読み込んで利用しますが、WebUIはそれでは足りない設定を`runtask-ui.yaml`として持ちます。WebUIで操作可能なブランチやタスクの選択、タスクの前の事前実行タスク、成果物やワーク、履歴の管理、認証認可など
+* CLIでは必要なライブラリなどは揃っている前提で書かれたタスクのみを実行しますが、WebUIはクリーンビルドなどのために追加のパッケージインストール処理などが定義できます
+* 実行結果は履歴として保持され、成果物や保存された作業フォルダをあとから参照できます
+
+リポジトリのワークスペースを作らずに`.vscode/tasks.json`に書かれたコマンドの単体実行だけを行うオプションもあります。
+
+### WebUIの初期設定
+
+WebUI 用の設定ファイルは `runtask-ui.yaml` です。最初のひな形は `ui init` で作れます。
 
 ```sh
-runtask add swift
-runtask swift-clean
-runtask swift-run
+# 対話式に初期設定を生成
+runtask ui init
+
+# 設定ファイルを書き出さず標準出力に確認
+runtask ui init --write=false
 ```
 
-出力例:
-
-```text
-$ runtask add swift
-added 4 tasks to .vscode/tasks.json: swift-build, swift-clean, swift-run, swift-test
-```
-
-`swift-run` は executable target を含む package が必要です。
-
-detect した gulp task をそのまま保存:
+生成後に、公開する task やブランチを簡易編集するコマンドもあります。
 
 ```sh
-runtask add detect --save --ecosystem gulp --all
+runtask ui edit task
+runtask ui edit branch
 ```
 
-## 配布
+この簡易編集で向いているのは、公開対象のタスクやブランチの見直しなどです。認証認可や実行モードなどの細かい設定変更は`runtask-ui.yaml` を直接編集してください。`llms.txt`や、設定の変更用のskillsは[リポジトリ](https://github.com/shibukawa/vsc-taskrunner)にあります。
 
-### Release バイナリ
-
-`v1.2.3` 形式のタグを push すると、GitHub Releases に次の target 向け archive を公開します。
-
-- `linux/amd64`
-- `linux/arm64`
-- `darwin/arm64`
-- `windows/amd64`
-- `windows/arm64`
-
-archive 名は次の形式です。
-
-- `runtask_<version>_<os>_<arch>.tar.gz`
-- `runtask_<version>_<os>_<arch>.zip`
-
-例:
+## WebUIの起動:
 
 ```sh
-curl -L -o runtask_1.2.3_linux_amd64.tar.gz \
-  https://github.com/<owner>/vsc-taskrunner/releases/download/v1.2.3/runtask_1.2.3_linux_amd64.tar.gz
-tar -xzf runtask_1.2.3_linux_amd64.tar.gz
-./runtask --help
+runtask ui
 ```
 
-各 release には `checksums.txt` も含まれます。
+### タスクの設定詳細
 
-### Docker イメージ
+WebUIではタスクごとに事前処理、成果物、履歴保持、作業フォルダの扱いを設定できます。代表的な設定例は次のとおりです。
 
-タグ push 時に GHCR にもコンテナイメージを公開します。
+```yaml
+tasks:
+  build:
+    # 事前実行タスク
+    preRunTask:
+      - command: npm
+        args:
+          - ci
+        cwd: ${workspaceFolder}
+    # 成果物
+    artifacts:
+      - path: dist
+        format: zip
+        nameTemplate: frontend-{branch}-b{buildno}-{yyyymmdd}-{hhmmss}-{hash}.zip
+    # タスク単位の履歴保持数
+    historyKeepCount: 10
+    # 作業フォルダの保存数
+    worktree:
+      # リポジトリ展開を抑えた軽量実行にする場合は true
+      disabled: false
+      keepOnSuccess: 0
+      keepOnFailure: 5
+
+# 全体のストレージ設定（タスク定義が優先）
+storage:
+  historyKeepCount: 50
+  worktree:
+    keepOnSuccess: 0
+    keepOnFailure: 2
+```
+
+- `preRunTask`: 本体 task の前に一度だけ実行する前処理です。`npm ci` などの依存取得に向いています
+- `artifacts`: 実行後にダウンロード対象として残すファイルやディレクトリです
+- `historyKeepCount`: 実行履歴を何件残すかです。task ごとの上書きが無ければ `storage.historyKeepCount` を使います
+- `worktree.disabled`: リポジトリ全体を展開しない task 向けのフラグです
+- `worktree.keepOnSuccess` / `keepOnFailure`: 成功時・失敗時に作業フォルダをいくつ保持するかです
+
+成果物名テンプレートでは次のプレースホルダが使えます。
+
+- `{buildno}`: ビルド番号
+- `{yyyymmdd}`: 年月日(UTC)
+- `{hhmmss}`: 時分秒(UTC)
+- `{yyyymmddhhmmss}`: 年月日時分秒(UTC)
+- `{hash}`: Gitハッシュ(先頭7文字)
+- `{longhash}`: Gitハッシュ
+- `{branch}`: ブランチ
+
+### API アクセス
+
+WebUI はブラウザ操作だけでなく、アクセストークンを使った API 実行にも対応しています。定期実行や外部システムからの起動に向いています。
+
+管理者ユーザーは WebUIの設定画面からトークンを発行できます。トークンには用途に応じてscopeを付けられます。
+
+- `runs:read`: 実行履歴や結果の参照
+- `runs:write`: task の起動
+
+代表的な API は次のとおりです。トークン発行画面でcurlコマンドのコピーができます。
+
+- `GET /api/me`: 現在の利用者情報と権限確認
+- `GET /api/runs`: 実行履歴の取得
+- `POST /api/runs`: task の起動
+- `GET /api/runs/{runId}`: 実行詳細の取得
+- `GET /api/runs/{runId}/artifacts`: 成果物一覧
+- `GET /api/runs/{runId}/worktree.zip`: 保存済み作業フォルダのダウンロード
+
+起動例:
 
 ```sh
-docker pull ghcr.io/<owner>/vsc-taskrunner:v1.2.3
-docker run --rm ghcr.io/<owner>/vsc-taskrunner:v1.2.3 --help
+curl -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -X POST http://localhost:8080/api/runs \
+  -d '{"branch":"main","taskLabel":"build","inputValues":{}}'
 ```
 
-現状の image manifest は `linux/amd64` と `linux/arm64` を公開します。
+### 認証と認可
 
-## Continuous Integration
+ローカル確認だけなら `auth.noAuth: true` で起動できます。共有環境用にOIDCをサポートしています。
 
-GitHub Actions は pull request と `main` への push で次を実行します。
+```yaml
+auth:
+  oidcIssuer: https://issuer.example.com
+  oidcClientID: runtask
+  oidcClientSecret: ${OIDC_CLIENT_SECRET}
+  sessionSecret: ${SESSION_SECRET}
+  allowUsers:
+    role:
+      - runner
+  adminUsers:
+    role:
+      - admin
+  apiTokens:
+    enabled: true
+```
 
-- `gofmt -l .`
-- `go vet ./...`
-- `go test ./...`
-- `go build ./...`
+- `allowUsers`: WebUI を利用できるユーザー条件です。未設定なら認証済みユーザー全員を許可します
+- `adminUsers`: 設定確認や API トークン管理を許可するユーザー条件です。クレームのキーとマッチする条件(glob形式)で書けます
+- `apiTokens.enabled`: API トークン機能の有効化です。共有環境で API 連携を行う場合に使います
 
-release 自動化は `v1.2.3` 形式のタグ push を起点に動きます。
+### 環境構築
 
-## License
+- `server.host` / `server.port` / `server.publicURL` を設定して公開します
+
+#### 常駐モード
+
+シンプルな1台のサーバーでWebUIを常駐させる構成です。
+
+- `storage.backend: local` でローカルディスクに履歴や成果物を保存できます
+- 同じマシンに履歴や repository cache が残るため、繰り返し実行でキャッシュを最大限に活かせます
+
+#### サーバーレスモード
+
+Google Cloud Run functions、AWS Lambda、AWS ECSなどを使い、アクセスがあった時のみサーバーリソースを使うモードです。ビルド作業などはブロックストレージがあるため問題なくできますが、アクティブなインスタンスがなくなるとブロックストレージもリセットされてしまうため、`.git`のクローンや、外部パッケージのキャッシュなどがなくなる可能性があります。巨大プロジェクトなどでは常駐モードを使うか、AWS EFSやGoogle Cloud Firestoreなどをマウントして作業フォルダとしてください。
+
+サーバーレスモードでは実行結果、成果物、ワークの保存先としてS3互換のオブジェクトストレージを使います。
+
+```yaml
+storage:
+  backend: object
+  object:
+    endpoint: https://s3.example.com
+    bucket: runtask
+    region: ap-northeast-1
+```
+
+## ライセンス
 
 この project は GNU Affero General Public License v3.0 以降で提供します。
 [LICENSE](LICENSE) を参照してください。
+
+
