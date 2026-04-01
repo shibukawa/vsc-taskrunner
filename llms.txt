@@ -1,6 +1,6 @@
-# taskrun-ui.yaml LLM Guide
+# runtask-ui.yaml LLM Guide
 
-This guide is only for `taskrun-ui.yaml`, the configuration file for `runtask ui`.
+This guide is only for `runtask-ui.yaml`, the configuration file for `runtask ui`.
 It does not cover `.vscode/tasks.json`; that remains standard VS Code task configuration.
 
 ## UI command limits
@@ -14,11 +14,11 @@ It does not cover `.vscode/tasks.json`; that remains standard VS Code task confi
 - basic auth mode
 - basic storage mode
 
-If the user needs advanced auth rules, token storage, object storage tuning, logging redaction, pre-run commands, or sparse/full worktree control, edit `taskrun-ui.yaml` directly instead of trying to force those settings through the interactive UI commands.
+If the user needs advanced auth rules, token storage, object storage tuning, logging redaction, pre-run commands, or sparse/full worktree control, edit `runtask-ui.yaml` directly instead of trying to force those settings through the interactive UI commands.
 
 ## Required schema comment
 
-When generating or rewriting `taskrun-ui.yaml`, always put this exact comment on the first line:
+When generating or rewriting `runtask-ui.yaml`, always put this exact comment on the first line:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json
@@ -97,7 +97,9 @@ Each task config may contain:
 
 - `artifacts`
 - `preRunTask`
-- `worktreeDisabled`
+- `worktree.disabled`
+- `worktree.keepOnSuccess`
+- `worktree.keepOnFailure`
 
 ### `tasks.<pattern>.artifacts[]`
 
@@ -127,7 +129,7 @@ Behavior:
 - they are not stored as child tasks
 - if a pre-run command fails, the parent task does not start
 
-### `tasks.<pattern>.worktreeDisabled`
+### `tasks.<pattern>.worktree.disabled`
 
 - default `false`
 - when `true`, the task runs in the sparse tasks-only workspace instead of the full worktree
@@ -177,7 +179,7 @@ When generating YAML:
 - Use placeholder secrets like `${OIDC_CLIENT_SECRET}` instead of real secret values.
 - Keep `tasks` entries in priority order because first match wins.
 - Do not assume `preRunTask` becomes a visible child task.
-- Do not assume `worktreeDisabled: true` means “disabled task”; it means sparse workspace execution.
+- Do not assume `worktree.disabled: true` means “disabled task”; it means sparse workspace execution.
 - For remote repositories, remember that Go validation may still require `cachePath` even if the schema cannot fully express that cross-field rule.
 - For `auth.apiTokens.enabled: true`, remember Go validation also requires `auth.noAuth=false`.
 
@@ -250,7 +252,7 @@ tasks:
 ## Related files
 
 - Schema: `https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json`
-- Human-readable reference: `docs/web-ui.ja.md`
-- Codex workflow: `.codex/skills/taskrun-ui-config/SKILL.md`
+- Repository documentation: consult repository-local README or Web UI documentation when available
+- Repository customization: consult any repository-local skill or prompt for direct `runtask-ui.yaml` editing when available
 
-Go validation in `internal/uiconfig/config.go` is the final source of truth when schema and prose are not enough to express a rule.
+Go validation in the runtask codebase remains the final source of truth when schema and prose are not enough to express a rule.
