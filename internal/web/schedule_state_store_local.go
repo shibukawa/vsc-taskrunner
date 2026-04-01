@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"golang.org/x/sys/unix"
 )
 
 type LocalScheduleStateStore struct {
@@ -33,24 +31,16 @@ func (s *LocalScheduleStateStore) UpdateState(ctx context.Context, fn func(*Sche
 	if err := os.MkdirAll(filepath.Dir(s.lockPath), 0o755); err != nil {
 		return fmt.Errorf("create schedule state lock dir: %w", err)
 	}
-	lockFile, err := os.OpenFile(s.lockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return fmt.Errorf("open schedule state lock: %w", err)
-	}
-	defer lockFile.Close()
-	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX); err != nil {
-		return fmt.Errorf("lock schedule state: %w", err)
-	}
-	defer unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
-
-	state, err := s.readState()
-	if err != nil {
-		return err
-	}
-	if err := fn(state); err != nil {
-		return err
-	}
-	return s.writeState(state)
+	return withExclusiveFileLock(s.lockPath, "open schedule state lock", "lock schedule state", func() error {
+		state, err := s.readState()
+		if err != nil {
+			return err
+		}
+		if err := fn(state); err != nil {
+			return err
+		}
+		return s.writeState(state)
+	})
 }
 
 func (s *LocalScheduleStateStore) readState() (*ScheduleStateIndex, error) {

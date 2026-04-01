@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sys/unix"
 	"vsc-taskrunner/internal/uiconfig"
 )
 
@@ -253,11 +252,7 @@ func (s *MetricsService) collectStorage() {
 		})
 	}
 
-	freeBytes := uint64(0)
-	var stat unix.Statfs_t
-	if root != "" && unix.Statfs(root, &stat) == nil {
-		freeBytes = stat.Bavail * uint64(stat.Bsize)
-	}
+	freeBytes := freeBytesForPath(root)
 
 	now := time.Now().UTC()
 	s.mu.Lock()
