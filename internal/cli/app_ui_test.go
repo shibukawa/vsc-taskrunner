@@ -337,7 +337,8 @@ func TestAppRunUIEditTaskUpdatePreservesOtherFields(t *testing.T) {
 		"      - command: echo",
 		"        args:",
 		"          - prepare",
-		"    worktreeDisabled: true",
+		"    worktree:",
+		"      disabled: true",
 		"execution:",
 		"  maxParallelRuns: 4",
 		"metrics:",
@@ -372,8 +373,8 @@ func TestAppRunUIEditTaskUpdatePreservesOtherFields(t *testing.T) {
 	if len(taskCfg.PreRunTasks) != 1 || taskCfg.PreRunTasks[0].Command != "echo" {
 		t.Fatalf("preRunTasks = %+v", taskCfg.PreRunTasks)
 	}
-	if !taskCfg.WorktreeDisabled {
-		t.Fatalf("expected worktreeDisabled to be preserved: %+v", taskCfg)
+	if taskCfg.Worktree == nil || taskCfg.Worktree.Disabled == nil || !*taskCfg.Worktree.Disabled {
+		t.Fatalf("expected worktree.disabled to be preserved: %+v", taskCfg)
 	}
 }
 

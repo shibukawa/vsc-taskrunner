@@ -501,7 +501,7 @@ onBeforeUnmount(() => {
           </dd>
         </template>
         <dt>Worktree Disabled</dt>
-        <dd>{{ taskPopoverBool(taskPopover.task.worktreeDisabled) }}</dd>
+        <dd>{{ taskPopoverBool(taskPopover.task.worktree?.disabled) }}</dd>
         <template v-if="taskPopover.task.artifacts?.length">
           <dt>Artifacts</dt>
           <dd>

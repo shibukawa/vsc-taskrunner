@@ -63,8 +63,11 @@ tasks:
         args:
           - ci
         cwd: ${workspaceFolder}
-    # default: false
-    worktreeDisabled: false
+    historyKeepCount: 10
+    worktree:
+      disabled: false  # default: false
+      keepOnSuccess: 0 # overwrite: global setting
+      keepOnFailure: 5 # overwrite: global setting
   test:
     preRunTask:
       - command: npm
@@ -79,7 +82,8 @@ tasks:
         cwd: ${workspaceFolder}
   show-input: {}
   no-checkout-demo:
-    worktreeDisabled: true
+    worktree:
+      disabled: true
   demo-parallel: {}
   demo-sequence: {}
   demo-mixed: {}

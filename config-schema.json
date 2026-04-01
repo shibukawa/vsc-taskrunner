@@ -135,7 +135,7 @@
             {
               "path": "dist",
               "format": "zip",
-              "nameTemplate": "frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip"
+              "nameTemplate": "frontend-{branch}-b{buildno}-{yyyymmdd}-{hhmmss}-{hash}.zip"
             }
           ],
           "preRunTask": [
@@ -387,10 +387,34 @@
             "$ref": "#/$defs/preRunTaskConfig"
           }
         },
-        "worktreeDisabled": {
+        "historyKeepCount": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Override how many history entries to keep for this task. If omitted, storage.historyKeepCount is used."
+        },
+        "worktree": {
+          "$ref": "#/$defs/taskWorktreeConfig"
+        }
+      }
+    },
+    "taskWorktreeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disabled": {
           "type": "boolean",
           "description": "Run with the sparse tasks-only workspace instead of the full worktree.",
           "default": false
+        },
+        "keepOnSuccess": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Override how many successful run worktrees to keep for this task. If omitted, storage.worktree.keepOnSuccess is used."
+        },
+        "keepOnFailure": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Override how many failed run worktrees to keep for this task. If omitted, storage.worktree.keepOnFailure is used."
         }
       }
     },
@@ -409,7 +433,7 @@
         "nameTemplate": {
           "type": "string",
           "default": "artifacts.zip",
-          "description": "Archive name template used only when format=zip."
+          "description": "Archive name template used only when format=zip. Supports placeholders such as {buildno}, {branch}, {hash}, and UTC timestamp variants."
         },
         "format": {
           "type": "string",

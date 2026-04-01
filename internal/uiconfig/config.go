@@ -115,9 +115,11 @@ type AllowedTaskSpec struct {
 }
 
 type TaskUIConfig struct {
-	Artifacts        []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
-	PreRunTasks      []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
-	WorktreeDisabled bool                 `yaml:"worktreeDisabled,omitempty"`
+	Artifacts   []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
+	PreRunTasks []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
+	// Per-task overrides. If nil/empty the global storage settings are used.
+	HistoryKeepCount *int                `yaml:"historyKeepCount,omitempty"`
+	Worktree         *TaskWorktreeConfig `yaml:"worktree,omitempty"`
 }
 
 type ArtifactRuleConfig struct {
@@ -251,6 +253,12 @@ type StorageConfig struct {
 	Backend          string              `yaml:"backend"`
 	Object           ObjectStorageConfig `yaml:"object"`
 	Worktree         WorktreeConfig      `yaml:"worktree"`
+}
+
+type TaskWorktreeConfig struct {
+	Disabled      *bool `yaml:"disabled,omitempty"`
+	KeepOnSuccess *int  `yaml:"keepOnSuccess,omitempty"`
+	KeepOnFailure *int  `yaml:"keepOnFailure,omitempty"`
 }
 
 type ObjectStorageConfig struct {
@@ -484,7 +492,49 @@ func validateTaskUIConfig(cfg TaskUIConfig, prefix string) error {
 			return err
 		}
 	}
+	if cfg.HistoryKeepCount != nil {
+		if *cfg.HistoryKeepCount <= 0 {
+			return fmt.Errorf("%s.historyKeepCount must be > 0", prefix)
+		}
+	}
+	if cfg.Worktree != nil {
+		if cfg.Worktree.KeepOnSuccess != nil && *cfg.Worktree.KeepOnSuccess < 0 {
+			return fmt.Errorf("%s.worktree.keepOnSuccess must be >= 0", prefix)
+		}
+		if cfg.Worktree.KeepOnFailure != nil && *cfg.Worktree.KeepOnFailure < 0 {
+			return fmt.Errorf("%s.worktree.keepOnFailure must be >= 0", prefix)
+		}
+	}
 	return nil
+}
+
+// HistoryKeepCountFor returns the effective historyKeepCount for the given taskLabel,
+// falling back to the global storage value when not overridden.
+func (c *UIConfig) HistoryKeepCountFor(taskLabel string) int {
+	if specCfg, ok := c.TaskConfig(taskLabel); ok {
+		if specCfg.HistoryKeepCount != nil {
+			return *specCfg.HistoryKeepCount
+		}
+	}
+	return c.Storage.HistoryKeepCount
+}
+
+// WorktreeRetentionFor returns the effective keepOnSuccess and keepOnFailure
+// values for the given taskLabel, falling back to global storage when not overridden.
+func (c *UIConfig) WorktreeRetentionFor(taskLabel string) (int, int) {
+	keepOnSuccess := c.Storage.Worktree.KeepOnSuccess
+	keepOnFailure := c.Storage.Worktree.KeepOnFailure
+	if specCfg, ok := c.TaskConfig(taskLabel); ok {
+		if specCfg.Worktree != nil {
+			if specCfg.Worktree.KeepOnSuccess != nil {
+				keepOnSuccess = *specCfg.Worktree.KeepOnSuccess
+			}
+			if specCfg.Worktree.KeepOnFailure != nil {
+				keepOnFailure = *specCfg.Worktree.KeepOnFailure
+			}
+		}
+	}
+	return keepOnSuccess, keepOnFailure
 }
 
 func validateArtifactRuleConfig(rule ArtifactRuleConfig, prefix string) error {
@@ -633,6 +683,10 @@ func (c *UIConfig) TaskConfig(taskLabel string) (*TaskUIConfig, bool) {
 				}
 				cfg.Artifacts = artifacts
 			}
+			if cfg.Worktree != nil {
+				copied := *cfg.Worktree
+				cfg.Worktree = &copied
+			}
 			return &cfg, true
 		}
 	}
@@ -649,10 +703,10 @@ func (c *UIConfig) MatchingPreRunTasks(taskLabel string) []PreRunTaskConfig {
 
 func (c *UIConfig) UseSparseRunWorkspace(taskLabel string) bool {
 	cfg, ok := c.TaskConfig(taskLabel)
-	if !ok {
+	if !ok || cfg.Worktree == nil || cfg.Worktree.Disabled == nil {
 		return false
 	}
-	return cfg.WorktreeDisabled
+	return *cfg.Worktree.Disabled
 }
 
 func (c *UIConfig) MatchUser(claims map[string]any) bool {

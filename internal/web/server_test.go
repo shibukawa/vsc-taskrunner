@@ -76,6 +76,10 @@ func serverAllowedTaskSpecs(specs ...uiconfig.AllowedTaskSpec) uiconfig.AllowedT
 	return uiconfig.AllowedTaskSpecs(specs)
 }
 
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func TestReferencedInputsReturnsOnlyUsedInputs(t *testing.T) {
 	t.Parallel()
 
@@ -136,9 +140,9 @@ func TestHandleBranchesPreloadsTasksAndCommitDate(t *testing.T) {
 	cfg.Branches = []string{"main"}
 	cfg.Tasks = serverAllowedTaskSpecs(
 		uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{
-			Artifacts:        []uiconfig.ArtifactRuleConfig{{Path: "dist/*"}},
-			PreRunTasks:      []uiconfig.PreRunTaskConfig{{Command: "echo", Args: []string{"setup"}, CWD: "/tmp/run"}},
-			WorktreeDisabled: true,
+			Artifacts:   []uiconfig.ArtifactRuleConfig{{Path: "dist/*"}},
+			PreRunTasks: []uiconfig.PreRunTaskConfig{{Command: "echo", Args: []string{"setup"}, CWD: "/tmp/run"}},
+			Worktree:    &uiconfig.TaskWorktreeConfig{Disabled: boolPtr(true)},
 		}},
 		uiconfig.AllowedTaskSpec{Pattern: "lint", Config: uiconfig.TaskUIConfig{}},
 	)
@@ -158,10 +162,12 @@ func TestHandleBranchesPreloadsTasksAndCommitDate(t *testing.T) {
 		Tasks      []struct {
 			Label              string   `json:"label"`
 			Artifact           bool     `json:"artifact"`
-			WorktreeDisabled   bool     `json:"worktreeDisabled"`
 			TaskFilePath       string   `json:"taskFilePath"`
 			ResolvedTaskLabels []string `json:"resolvedTaskLabels"`
-			PreRunTasks        []struct {
+			Worktree           *struct {
+				Disabled bool `json:"disabled"`
+			} `json:"worktree"`
+			PreRunTasks []struct {
 				Command string   `json:"command"`
 				Args    []string `json:"args"`
 				CWD     string   `json:"cwd"`
@@ -185,7 +191,7 @@ func TestHandleBranchesPreloadsTasksAndCommitDate(t *testing.T) {
 	if len(items[0].Tasks) != 1 || items[0].Tasks[0].Label != "build" {
 		t.Fatalf("unexpected tasks: %+v", items[0].Tasks)
 	}
-	if !items[0].Tasks[0].Artifact || !items[0].Tasks[0].WorktreeDisabled {
+	if !items[0].Tasks[0].Artifact || items[0].Tasks[0].Worktree == nil || !items[0].Tasks[0].Worktree.Disabled {
 		t.Fatalf("expected task config flags in response, got %+v", items[0].Tasks[0])
 	}
 	if items[0].Tasks[0].TaskFilePath != ".vscode/tasks.json" {
