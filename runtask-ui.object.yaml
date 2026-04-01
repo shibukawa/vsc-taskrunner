@@ -68,7 +68,8 @@ tasks:
           - ci
         cwd: ${workspaceFolder}
     # default: false
-    worktreeDisabled: false
+    worktree:
+      disabled: false
   test:
     preRunTask:
       - command: npm
@@ -83,7 +84,8 @@ tasks:
         cwd: ${workspaceFolder}
   show-input: {}
   no-checkout-demo:
-    worktreeDisabled: true
+    worktree:
+      disabled: true
   demo-parallel: {}
   demo-sequence: {}
   demo-mixed: {}

@@ -65,7 +65,7 @@ tasks:
         cwd: ${workspaceFolder}
     historyKeepCount: 10
     worktree:
-      disable: false   # default: false
+      disabled: false  # default: false
       keepOnSuccess: 0 # overwrite: global setting
       keepOnFailure: 5 # overwrite: global setting
   test:

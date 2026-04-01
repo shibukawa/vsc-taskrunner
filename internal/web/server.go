@@ -53,11 +53,17 @@ type branchTaskResponse struct {
 	Background         bool                   `json:"background,omitempty"`
 	Inputs             []tasks.Input          `json:"inputs,omitempty"`
 	Artifact           bool                   `json:"artifact,omitempty"`
-	WorktreeDisabled   bool                   `json:"worktreeDisabled,omitempty"`
+	Worktree           *taskWorktreeResponse  `json:"worktree,omitempty"`
 	PreRunTasks        []preRunTaskResponse   `json:"preRunTasks,omitempty"`
 	Artifacts          []artifactRuleResponse `json:"artifacts,omitempty"`
 	TaskFilePath       string                 `json:"taskFilePath,omitempty"`
 	ResolvedTaskLabels []string               `json:"resolvedTaskLabels,omitempty"`
+}
+
+type taskWorktreeResponse struct {
+	Disabled      *bool `json:"disabled,omitempty"`
+	KeepOnSuccess *int  `json:"keepOnSuccess,omitempty"`
+	KeepOnFailure *int  `json:"keepOnFailure,omitempty"`
 }
 
 type preRunTaskResponse struct {
@@ -436,7 +442,7 @@ func loadBranchTasks(data []byte, tasksPath string, workspaceRoot string, cfg *u
 			Background:         task.IsBackground,
 			Inputs:             referencedInputs(task, file.Inputs),
 			Artifact:           len(taskCfg.Artifacts) > 0,
-			WorktreeDisabled:   taskCfg.WorktreeDisabled,
+			Worktree:           buildTaskWorktreeResponse(taskCfg.Worktree),
 			PreRunTasks:        buildPreRunTaskResponses(taskCfg.PreRunTasks),
 			Artifacts:          buildArtifactRuleResponses(taskCfg.Artifacts),
 			TaskFilePath:       tasksPath,
@@ -479,6 +485,29 @@ func buildArtifactRuleResponses(items []uiconfig.ArtifactRuleConfig) []artifactR
 			Format:       item.Format,
 			NameTemplate: item.NameTemplate,
 		})
+	}
+	return resp
+}
+
+func buildTaskWorktreeResponse(cfg *uiconfig.TaskWorktreeConfig) *taskWorktreeResponse {
+	if cfg == nil {
+		return nil
+	}
+	resp := &taskWorktreeResponse{}
+	if cfg.Disabled != nil {
+		value := *cfg.Disabled
+		resp.Disabled = &value
+	}
+	if cfg.KeepOnSuccess != nil {
+		value := *cfg.KeepOnSuccess
+		resp.KeepOnSuccess = &value
+	}
+	if cfg.KeepOnFailure != nil {
+		value := *cfg.KeepOnFailure
+		resp.KeepOnFailure = &value
+	}
+	if resp.Disabled == nil && resp.KeepOnSuccess == nil && resp.KeepOnFailure == nil {
+		return nil
 	}
 	return resp
 }

@@ -454,7 +454,7 @@ func TestDoRunUsesTasksSparsePathsWhenConfigured(t *testing.T) {
 				Source: "/tmp/local-repo",
 			},
 			Tasks: allowedTaskSpecs(
-				uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{WorktreeDisabled: true}},
+				uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{Worktree: &uiconfig.TaskWorktreeConfig{Disabled: boolPtr(true)}}},
 			),
 		},
 		history: history,

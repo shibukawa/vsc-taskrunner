@@ -32,11 +32,17 @@ export type BranchTask = {
   background?: boolean
   inputs?: TaskInput[]
   artifact?: boolean
-  worktreeDisabled?: boolean
+  worktree?: TaskWorktree
   preRunTasks?: PreRunTask[]
   artifacts?: ArtifactRule[]
   taskFilePath?: string
   resolvedTaskLabels?: string[]
+}
+
+export type TaskWorktree = {
+  disabled?: boolean
+  keepOnSuccess?: number
+  keepOnFailure?: number
 }
 
 export type ArtifactRule = {
