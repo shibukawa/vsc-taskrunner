@@ -262,7 +262,7 @@ func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel
 		_ = tm.history.AbortRun(meta)
 		return nil, fmt.Errorf("write initial meta: %w", err)
 	}
-	if err := tm.history.RecordRunCompletion(meta, tm.config.Storage.HistoryKeepCount); err != nil {
+	if err := tm.history.RecordRunCompletion(meta, tm.config.HistoryKeepCountFor(meta.TaskLabel)); err != nil {
 		tm.logRunStartFailure(meta, "write initial history index", err)
 		logFile.Close()
 		_ = tm.history.AbortRun(meta)
@@ -329,9 +329,10 @@ func (tm *TaskManager) executeRun(ctx context.Context, active *ActiveRun) {
 
 		_ = tm.history.FinalizeRun(active.Meta.RunID)
 
-		// Prune old history and worktrees.
-		_ = tm.history.Prune(tm.config.Storage.HistoryKeepCount)
-		_ = tm.history.PruneWorktrees(tm.config.Storage.Worktree.KeepOnSuccess, tm.config.Storage.Worktree.KeepOnFailure)
+		// Prune old history and worktrees (use task-specific overrides when present).
+		_ = tm.history.Prune(tm.config.HistoryKeepCountFor(active.Meta.TaskLabel))
+		sOK, sFail := tm.config.WorktreeRetentionFor(active.Meta.TaskLabel)
+		_ = tm.history.PruneWorktrees(sOK, sFail)
 	}()
 
 	if tm.sem != nil {
@@ -484,12 +485,16 @@ func (tm *TaskManager) doRun(ctx context.Context, active *ActiveRun) error {
 		meta.Status = RunStatusSuccess
 	}
 
-	if persistErr := tm.history.PersistCompletedRun(
-		meta,
-		tm.config.Storage.HistoryKeepCount,
-		tm.config.Storage.Worktree.KeepOnSuccess,
-		tm.config.Storage.Worktree.KeepOnFailure,
-	); persistErr != nil {
+	if persistErr := func() error {
+		hk := tm.config.HistoryKeepCountFor(meta.TaskLabel)
+		ok, fail := tm.config.WorktreeRetentionFor(meta.TaskLabel)
+		return tm.history.PersistCompletedRun(
+			meta,
+			hk,
+			ok,
+			fail,
+		)
+	}(); persistErr != nil {
 		fmt.Fprintf(bw, "=== runtask: warning: failed to persist run meta: %v ===\n", persistErr)
 	}
 
@@ -704,12 +709,16 @@ func (tm *TaskManager) failRun(active *ActiveRun, cause error) {
 		}
 	}
 	meta.Tasks = collectTaskRuns(active)
-	_ = tm.history.PersistCompletedRun(
-		meta,
-		tm.config.Storage.HistoryKeepCount,
-		tm.config.Storage.Worktree.KeepOnSuccess,
-		tm.config.Storage.Worktree.KeepOnFailure,
-	)
+	_ = func() error {
+		hk := tm.config.HistoryKeepCountFor(meta.TaskLabel)
+		ok, fail := tm.config.WorktreeRetentionFor(meta.TaskLabel)
+		return tm.history.PersistCompletedRun(
+			meta,
+			hk,
+			ok,
+			fail,
+		)
+	}()
 	log.Printf("runtask run failed run_id=%q branch=%q task=%q user=%q status=%q error=%q duration_ms=%d", meta.RunID, meta.Branch, meta.TaskLabel, meta.User, meta.Status, cause.Error(), meta.EndTime.Sub(meta.StartTime).Milliseconds())
 	if active.logFile != nil {
 		_ = active.logFile.Close()

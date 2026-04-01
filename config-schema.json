@@ -135,7 +135,7 @@
             {
               "path": "dist",
               "format": "zip",
-              "nameTemplate": "frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip"
+              "nameTemplate": "frontend-{branch}-b{buildno}-{yyyymmdd}-{hhmmss}-{hash}.zip"
             }
           ],
           "preRunTask": [
@@ -409,7 +409,7 @@
         "nameTemplate": {
           "type": "string",
           "default": "artifacts.zip",
-          "description": "Archive name template used only when format=zip."
+          "description": "Archive name template used only when format=zip. Supports placeholders such as {buildno}, {branch}, {hash}, and UTC timestamp variants."
         },
         "format": {
           "type": "string",
