@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1209,6 +1210,7 @@ func (tm *TaskManager) resolveArtifactArchiveName(meta *RunMeta, worktreePath st
 		"{yyyymmdd}", meta.StartTime.UTC().Format("20060102"),
 		"{hhmmss}", meta.StartTime.UTC().Format("150405"),
 		"{yyyymmddhhmmss}", meta.StartTime.UTC().Format("20060102150405"),
+		"{buildno}", strconv.Itoa(meta.RunNumber),
 		"{hash}", hash,
 		"{longhash}", longHash,
 		"{branch}", sanitizeArtifactFilenamePart(meta.Branch),

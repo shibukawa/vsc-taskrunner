@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -180,6 +181,27 @@ func (s *LocalRunStore) ReadArtifactFile(runID, filePath string) ([]byte, error)
 		return nil, err
 	}
 	return os.ReadFile(cleanPath)
+}
+
+func (s *LocalRunStore) ReadWorktreeZip(runID string) ([]byte, error) {
+	root := s.WorktreePath(runID)
+	tmp, err := createWorktreeArchiveTemp(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	data, err := os.ReadFile(tmp.Name())
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (s *LocalRunStore) PresignWorktreeURL(runID string, expiry time.Duration) (string, error) {
+	return "", fmt.Errorf("presign not supported for local run store")
 }
 
 func (s *LocalRunStore) DeleteRun(runID string) error {

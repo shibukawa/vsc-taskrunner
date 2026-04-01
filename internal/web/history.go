@@ -243,6 +243,14 @@ func (s *HistoryStore) ReadWorktreeFile(runID, filePath string) ([]byte, error) 
 	return s.runs.ReadWorktreeFile(runID, filePath)
 }
 
+func (s *HistoryStore) ReadWorktreeZip(runID string) ([]byte, error) {
+	return s.runs.ReadWorktreeZip(runID)
+}
+
+func (s *HistoryStore) PresignWorktreeURL(runID string, expiry time.Duration) (string, error) {
+	return s.runs.PresignWorktreeURL(runID, expiry)
+}
+
 func (s *HistoryStore) ListArtifactFiles(runID string) ([]string, error) {
 	return s.runs.ListArtifactFiles(runID)
 }

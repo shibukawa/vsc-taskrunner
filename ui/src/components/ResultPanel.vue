@@ -26,6 +26,7 @@ type SummaryRow = {
   wide?: boolean
   fullValue?: string
   isHash?: boolean
+  isWorktree?: boolean
 }
 
 type InputRow = {
@@ -305,8 +306,42 @@ const summaryRows = computed<SummaryRow[]>(() => {
       isHash: true,
     })
   }
+  if (props.currentRun.worktreeKept) {
+    rows.push({ label: 'Work Folder', value: 'Download Copy', isWorktree: true })
+  }
   return rows
 })
+
+async function downloadWorktree() {
+  const runId = props.currentRun?.runId
+  if (!runId) return
+  // Try presign first
+  try {
+    const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}/worktree/presign`, { method: 'GET', credentials: 'same-origin' })
+    if (resp.ok) {
+      const j = await resp.json()
+      const url = j.url
+      if (url) {
+        const a = document.createElement('a')
+        a.href = url
+        a.style.display = 'none'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        return
+      }
+    }
+  } catch (e) {
+    // fallthrough to direct download
+  }
+  // fallback: direct download via server stream
+  const a = document.createElement('a')
+  a.href = `/api/runs/${encodeURIComponent(runId)}/worktree.zip`
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
 
 const timelineTasks = computed<TimelineTask[]>(() => {
   const { start: timelineStart, duration: timelineDuration } = timelineWindow.value
@@ -372,12 +407,17 @@ const timelineTasks = computed<TimelineTask[]>(() => {
               <div class="result-summary-grid">
                 <div v-for="row in summaryRows" :key="row.label" :class="['summary-cell', { wide: row.wide }]">
                   <span class="summary-label">{{ row.label }}</span>
-                  <strong
-                    :class="['summary-value', { 'summary-hash': row.isHash }]"
-                    :title="row.fullValue || undefined"
-                  >
-                    {{ row.value }}
-                  </strong>
+                  <template v-if="row.isWorktree">
+                    <a href="#" class="summary-value" @click.prevent="downloadWorktree">{{ row.value }}</a>
+                  </template>
+                  <template v-else>
+                    <strong
+                      :class="['summary-value', { 'summary-hash': row.isHash }]"
+                      :title="row.fullValue || undefined"
+                    >
+                      {{ row.value }}
+                    </strong>
+                  </template>
                 </div>
               </div>
             </section>

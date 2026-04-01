@@ -647,7 +647,7 @@ func TestConfigSchemaExamplesMatchGoValidation(t *testing.T) {
 			"    artifacts:",
 			"      - path: dist",
 			"        format: zip",
-			"        nameTemplate: frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip",
+			"        nameTemplate: frontend-{branch}-b{buildno}-{yyyymmdd}-{hhmmss}-{hash}.zip",
 			"    preRunTask:",
 			"      - command: npm",
 			"        args:",

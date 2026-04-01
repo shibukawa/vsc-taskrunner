@@ -16,10 +16,11 @@ import (
 )
 
 type ObjectRunStore struct {
-	local  *LocalRunStore
-	client *s3.Client
-	bucket string
-	prefix string
+	local   *LocalRunStore
+	client  *s3.Client
+	bucket  string
+	prefix  string
+	options ObjectIndexStoreOptions
 }
 
 func NewObjectRunStore(ctx context.Context, historyDir string, options ObjectIndexStoreOptions) (*ObjectRunStore, error) {
@@ -28,10 +29,11 @@ func NewObjectRunStore(ctx context.Context, historyDir string, options ObjectInd
 		return nil, err
 	}
 	return &ObjectRunStore{
-		local:  NewLocalRunStore(historyDir),
-		client: client,
-		bucket: options.Bucket,
-		prefix: strings.Trim(options.Prefix, "/"),
+		local:   NewLocalRunStore(historyDir),
+		client:  client,
+		bucket:  options.Bucket,
+		prefix:  strings.Trim(options.Prefix, "/"),
+		options: options,
 	}, nil
 }
 
@@ -250,6 +252,60 @@ func (s *ObjectRunStore) ReadArtifactFile(runID, filePath string) ([]byte, error
 		return data, nil
 	}
 	return s.readObject(context.Background(), s.runObjectKey(runID, filepath.ToSlash(filepath.Join("artifacts", filePath))))
+}
+
+func (s *ObjectRunStore) ReadWorktreeZip(runID string) ([]byte, error) {
+	if data, err := s.local.ReadWorktreeZip(runID); err == nil {
+		return data, nil
+	}
+	return s.readObject(context.Background(), s.runObjectKey(runID, worktreeArchiveObjectName))
+}
+
+func (s *ObjectRunStore) PresignWorktreeURL(runID string, expiry time.Duration) (string, error) {
+	// ensure object exists
+	key := s.runObjectKey(runID, worktreeArchiveObjectName)
+	if _, err := s.client.HeadObject(context.Background(), &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}); err != nil {
+		if isObjectNotFound(err) {
+			return "", fmt.Errorf("worktree archive not found")
+		}
+		return "", err
+	}
+	// If a public endpoint override is provided, create a temporary S3 client
+	// configured with that endpoint and use it to generate the presigned URL.
+	endpoint := os.Getenv("RUNTASK_RUSTFS_OBJECT_PUBLIC_ENDPOINT")
+	if endpoint != "" {
+		tempOptions := s.options
+		tempOptions.Endpoint = endpoint
+		tempClient, err := newS3Client(context.Background(), tempOptions)
+		if err == nil {
+			presigner := s3.NewPresignClient(tempClient)
+			presigned, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: aws.String(s.bucket),
+				Key:    aws.String(key),
+			}, func(opts *s3.PresignOptions) {
+				opts.Expires = expiry
+			})
+			if err == nil {
+				return presigned.URL, nil
+			}
+			// fallthrough to try using the existing client
+		}
+	}
+
+	presigner := s3.NewPresignClient(s.client)
+	presigned, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}, func(opts *s3.PresignOptions) {
+		opts.Expires = expiry
+	})
+	if err != nil {
+		return "", err
+	}
+	return presigned.URL, nil
 }
 
 func (s *ObjectRunStore) DeleteRun(runID string) error {

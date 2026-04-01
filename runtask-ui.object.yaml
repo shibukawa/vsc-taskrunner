@@ -61,7 +61,7 @@ tasks:
         # default: zip
         format: zip
         # default: artifacts.zip
-        nameTemplate: frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}.zip
+        nameTemplate: frontend-{branch}-b{buildno}-{yyyymmdd}-{hhmmss}-{hash}.zip
     preRunTask:
       - command: npm
         args:
