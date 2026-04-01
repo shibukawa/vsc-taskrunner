@@ -301,10 +301,10 @@ auth:
 
 This is the simplest setup: run the Web UI as a continuously running service on one server.
 
-Recommended startup command:
+Startup command:
 
 ```sh
-runtask ui --runtime-mode=always-on
+runtask ui
 ```
 
 - With `storage.backend: local`, history and artifacts are stored on the local disk
@@ -312,17 +312,89 @@ runtask ui --runtime-mode=always-on
 - Schedules are evaluated automatically by the runtask process roughly once per minute
 - Browsers can receive other users' run summary updates in real time through the global run stream
 
+#### Containerized setup
+
+Because the Web UI runs the commands defined in `.vscode/tasks.json` as-is, the final image needs both `git` and the language runtime required by the target project. The published image `ghcr.io/shibukawa/vsc-taskrunner:v1.0.0` can be used directly, but it also works well as a `runner` stage that provides the `runtask` binary for a custom runtime image.
+
+Example for a Node.js project:
+
+```dockerfile
+FROM ghcr.io/shibukawa/vsc-taskrunner:v1.0.0 AS runner
+
+FROM node:24-trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=runner /usr/local/bin/runtask /usr/local/bin/runtask
+COPY runtask-ui.yaml /app/config/runtask-ui.yaml
+
+CMD ["runtask", "ui", "--config", "/app/config/runtask-ui.yaml"]
+```
+
+- Replace `node` with `python`, `golang`, or any other runtime image your tasks require
+- Set `repository.cachePath` and `storage.historyDir` to match the persistent paths inside the container
+- When using local storage, run metadata, logs, artifacts, and preserved worktrees are stored under `storage.historyDir`, so it is convenient to expose that directory as the results volume
+
+Example configuration:
+
+```yaml
+repository:
+  source: https://github.com/example/repo.git
+  cachePath: /var/lib/runtask/repos/repo-cache.git
+
+storage:
+  backend: local
+  historyDir: /var/lib/runtask/results/history
+```
+
+If you use `docker compose`, it is usually easiest to separate the config file, repository cache, and results directory. The `compose.yaml` in this repository is aimed at local development, but for an operational image the following pattern is a good starting point.
+
+```yaml
+services:
+  runtask-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtask-ui
+    ports:
+      - "8080:8080"
+    command:
+      - runtask
+      - ui
+      - --config
+      - /app/config/runtask-ui.yaml
+    volumes:
+      - ./runtask-ui.yaml:/app/config/runtask-ui.yaml:ro
+      - runtask-repos:/var/lib/runtask/repos
+      - runtask-results:/var/lib/runtask/results
+
+volumes:
+  runtask-repos:
+  runtask-results:
+```
+
+- `runtask-repos` stores the bare repository cache
+- `runtask-results` stores the results directory including `storage.historyDir`
+- If you bake the config into the image, you can remove `./runtask-ui.yaml:/app/config/runtask-ui.yaml:ro`
+- With `storage.historyDir: /var/lib/runtask/results/history`, the full local result set stays under the `runtask-results` volume
+
 #### Serverless mode
 
-This mode is designed for environments such as Google Cloud Run functions, AWS Lambda, or AWS ECS, where server resources are used only when requests arrive. Build tasks themselves can still run, but if there are no active instances, the attached block storage may be reset. That means `.git` clones and downloaded package caches can disappear between runs. For large projects, prefer always-on mode or mount persistent storage such as AWS EFS so the work directory and caches survive.
+This mode is designed for environments such as Google Cloud Run functions, AWS Lambda, or AWS ECS, where server resources are used only when requests arrive. Start the service with `--runtime-mode=serverless`. Build tasks can still run, but in environments where local storage disappears when instances are recycled, `.git` clone cache and external package caches can also disappear between runs.
 
-Recommended startup command:
+> [!NOTE]
+> In serverless mode, users do not get real-time shared updates for runs started by other users or schedules. Shared history is refreshed by polling instead.
+
+Startup command:
 
 ```sh
 runtask ui --runtime-mode=serverless
 ```
 
-In serverless mode, run results, artifacts, and preserved work folders are typically stored in S3-compatible object storage.
+When you do not have persistent block storage such as NFS, configure `storage.backend: object` and store run results, artifacts, and preserved worktrees in S3-compatible object storage.
 
 ```yaml
 storage:
@@ -333,6 +405,16 @@ storage:
     region: ap-northeast-1
 ```
 
+Configure `storage.object` with `endpoint`, `bucket`, `region`, and optional credentials or prefix values. If you use a remote repository, `repository.cachePath` is also required.
+
+```yaml
+repository:
+  source: https://github.com/example/repo.git
+  cachePath: /mnt/shared-cache/repos/repo-cache.git
+```
+
+If repeated instance replacement makes clone cache or package cache too expensive to rebuild each time, mount the location used by `repository.cachePath` and language-specific cache directories such as `npm`, `pip`, or `go` caches onto shared NFS storage such as AWS EFS. This is optional, but it helps significantly for dependency-heavy projects.
+
 For scheduled execution in serverless mode, invoke the heartbeat endpoint from an external scheduler such as Cloud Scheduler, EventBridge, cron, or GitHub Actions.
 
 ```sh
@@ -340,8 +422,6 @@ curl -fsS https://runtask.example.com/api/heartbeat
 ```
 
 The heartbeat request only checks configured schedules and starts whichever runs are due at that moment.
-
-In this mode, browsers do not use the global live run stream. Shared history is refreshed by conditional polling of `/api/runs`.
 
 ## License
 
