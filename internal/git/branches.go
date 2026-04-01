@@ -60,7 +60,7 @@ func ListBranches(repoRoot string) ([]Branch, error) {
 	}
 
 	var branches []Branch
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -129,7 +129,7 @@ func SyncLocalBranchesFromOrigin(repoRoot string) error {
 	if err != nil {
 		return fmt.Errorf("list remote branches: %w", err)
 	}
-	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for name := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		name = strings.TrimSpace(name)
 		if name == "" || name == "HEAD" {
 			continue

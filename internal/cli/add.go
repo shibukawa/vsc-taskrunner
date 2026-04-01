@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -665,12 +666,7 @@ func generatedActionLabel(label string) string {
 }
 
 func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, target)
 }
 
 func filterCandidates(candidates []tasks.TaskCandidate, ecosystems []string, labels []string, addAll bool, requireExplicitSelection bool) ([]tasks.TaskCandidate, error) {

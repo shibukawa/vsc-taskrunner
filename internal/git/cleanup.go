@@ -32,7 +32,7 @@ func CleanupRuntimeBranches(repoRoot, prefix string) error {
 	if err != nil {
 		return fmt.Errorf("list runtime branches: %w", err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		ref := strings.TrimSpace(line)
 		if ref == "" {
 			continue

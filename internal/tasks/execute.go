@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -526,9 +527,7 @@ func exitCode(err error) int {
 
 func cloneBoolMap(source map[string]bool) map[string]bool {
 	result := make(map[string]bool, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
+	maps.Copy(result, source)
 	return result
 }
 
@@ -557,17 +556,17 @@ func (w *matchedWriter) Write(data []byte) (int, error) {
 	w.buffer.Write(data)
 	for {
 		text := w.buffer.String()
-		index := strings.IndexByte(text, '\n')
-		if index < 0 {
+		before, after, ok := strings.Cut(text, "\n")
+		if !ok {
 			break
 		}
-		line := strings.TrimRight(text[:index], "\r")
+		line := strings.TrimRight(before, "\r")
 		w.collector.ProcessLine(line)
 		if w.emitLine != nil {
 			w.emitLine(w.taskLabel, line+"\n")
 		}
 		w.buffer.Reset()
-		w.buffer.WriteString(text[index+1:])
+		w.buffer.WriteString(after)
 	}
 	return len(data), nil
 }

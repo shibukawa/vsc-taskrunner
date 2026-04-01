@@ -1,5 +1,7 @@
 package tasks
 
+import "maps"
+
 import "encoding/json"
 
 func builtinProblemMatchers() map[string]matcherConfig {
@@ -8,9 +10,7 @@ func builtinProblemMatchers() map[string]matcherConfig {
 		if target.problemMatchers == nil {
 			continue
 		}
-		for name, config := range target.problemMatchers() {
-			matchers[name] = config
-		}
+		maps.Copy(matchers, target.problemMatchers())
 	}
 	return matchers
 }

@@ -3,6 +3,7 @@ package tasks
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -64,8 +65,8 @@ type TaskEvent struct {
 	Status       string        `json:"status,omitempty"`
 	Line         string        `json:"line,omitempty"`
 	ExitCode     int           `json:"exitCode,omitempty"`
-	StartTime    time.Time     `json:"startTime,omitempty"`
-	EndTime      time.Time     `json:"endTime,omitempty"`
+	StartTime    time.Time     `json:"startTime"`
+	EndTime      time.Time     `json:"endTime"`
 }
 
 func (r *Runner) printTaskStart(task ResolvedTask) {
@@ -138,9 +139,7 @@ func colorizedEnv(base map[string]string, mode ColorMode) map[string]string {
 		return nil
 	}
 	result := make(map[string]string, len(base)+4)
-	for key, value := range base {
-		result[key] = value
-	}
+	maps.Copy(result, base)
 	switch mode {
 	case ColorModeNever:
 		result["NO_COLOR"] = "1"

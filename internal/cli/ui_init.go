@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -342,10 +343,8 @@ func promptChoice(reader *bufio.Reader, writer io.Writer, label string, defaultV
 		return "", err
 	}
 	value = strings.TrimSpace(value)
-	for _, item := range allowed {
-		if value == item {
-			return value, nil
-		}
+	if slices.Contains(allowed, value) {
+		return value, nil
 	}
 	return "", fmt.Errorf("invalid value %q (allowed: %s)", value, strings.Join(allowed, ", "))
 }
@@ -356,10 +355,8 @@ func promptEnumChoice(reader *bufio.Reader, writer io.Writer, label string, defa
 		return "", err
 	}
 	value = strings.ToLower(strings.TrimSpace(value))
-	for _, item := range allowed {
-		if value == item {
-			return value, nil
-		}
+	if slices.Contains(allowed, value) {
+		return value, nil
 	}
 	return "", fmt.Errorf("invalid value %q (allowed: %s)", value, strings.Join(allowed, ", "))
 }

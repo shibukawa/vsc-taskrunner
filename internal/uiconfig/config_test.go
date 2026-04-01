@@ -138,13 +138,13 @@ func TestTaskConfigDefaults(t *testing.T) {
 
 func TestMatchUser(t *testing.T) {
 	cfg := &UIConfig{Auth: AuthConfig{AllowUsers: []UserAccessRule{{Claim: "email", Value: "*@example.com"}, {Claim: "groups", Value: "admin"}}}}
-	if !cfg.MatchUser(map[string]interface{}{"email": "alice@example.com"}) {
+	if !cfg.MatchUser(map[string]any{"email": "alice@example.com"}) {
 		t.Fatal("expected email match")
 	}
-	if !cfg.MatchUser(map[string]interface{}{"groups": []interface{}{"viewer", "admin"}}) {
+	if !cfg.MatchUser(map[string]any{"groups": []any{"viewer", "admin"}}) {
 		t.Fatal("expected groups match")
 	}
-	if cfg.MatchUser(map[string]interface{}{"email": "alice@elsewhere.com"}) {
+	if cfg.MatchUser(map[string]any{"email": "alice@elsewhere.com"}) {
 		t.Fatal("expected mismatch")
 	}
 }
@@ -173,10 +173,10 @@ auth:
 	if got := cfg.Auth.AllowUsers[0]; got.Claim != "email" || got.Value != "*@example.com" {
 		t.Fatalf("unexpected first allowUsers rule: %+v", got)
 	}
-	if !cfg.MatchUser(map[string]interface{}{"role": []interface{}{"ops-prod"}}) {
+	if !cfg.MatchUser(map[string]any{"role": []any{"ops-prod"}}) {
 		t.Fatal("expected role list rule to match")
 	}
-	if !cfg.IsAdminUser(map[string]interface{}{"role": "administrator"}) {
+	if !cfg.IsAdminUser(map[string]any{"role": "administrator"}) {
 		t.Fatal("expected adminUsers mapping rule to match")
 	}
 }
@@ -198,10 +198,10 @@ auth:
 
 func TestIsAdminUser(t *testing.T) {
 	cfg := &UIConfig{Auth: AuthConfig{AdminUsers: []UserAccessRule{{Claim: "groups", Value: "admin"}}}}
-	if !cfg.IsAdminUser(map[string]interface{}{"groups": []interface{}{"viewer", "admin"}}) {
+	if !cfg.IsAdminUser(map[string]any{"groups": []any{"viewer", "admin"}}) {
 		t.Fatal("expected admin match")
 	}
-	if cfg.IsAdminUser(map[string]interface{}{"groups": []interface{}{"viewer"}}) {
+	if cfg.IsAdminUser(map[string]any{"groups": []any{"viewer"}}) {
 		t.Fatal("expected admin mismatch")
 	}
 }
@@ -223,10 +223,10 @@ func TestValidateUserAccessRules(t *testing.T) {
 
 func TestCanRunUsesAllowUsers(t *testing.T) {
 	cfg := &UIConfig{Auth: AuthConfig{AllowUsers: []UserAccessRule{{Claim: "email", Value: "*@example.com"}}}}
-	if !cfg.CanRun(map[string]interface{}{"email": "alice@example.com"}) {
+	if !cfg.CanRun(map[string]any{"email": "alice@example.com"}) {
 		t.Fatal("expected canRun")
 	}
-	if cfg.CanRun(map[string]interface{}{"email": "alice@elsewhere.com"}) {
+	if cfg.CanRun(map[string]any{"email": "alice@elsewhere.com"}) {
 		t.Fatal("expected canRun=false")
 	}
 }
@@ -575,7 +575,7 @@ func TestConfigSchemaParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("schema JSON is invalid: %v", err)
 	}
