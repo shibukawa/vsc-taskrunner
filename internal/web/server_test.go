@@ -2,6 +2,7 @@ package web
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -78,6 +79,38 @@ func serverAllowedTaskSpecs(specs ...uiconfig.AllowedTaskSpec) uiconfig.AllowedT
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+func readSSEEvent(t *testing.T, reader *bufio.Reader) (string, string) {
+	t.Helper()
+	eventType := ""
+	var data strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read sse line: %v", err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if eventType == "" && data.Len() == 0 {
+				continue
+			}
+			return eventType, data.String()
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event: "))
+			continue
+		}
+		if strings.HasPrefix(line, "data: ") {
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(strings.TrimPrefix(line, "data: "))
+		}
+	}
 }
 
 func TestReferencedInputsReturnsOnlyUsedInputs(t *testing.T) {
@@ -211,6 +244,58 @@ func TestHandleBranchesPreloadsTasksAndCommitDate(t *testing.T) {
 	}
 }
 
+func TestHandleBranchesOmitFileArtifactNameTemplateDefault(t *testing.T) {
+	t.Parallel()
+
+	repo := &serverTestRepo{
+		basePath: t.TempDir(),
+		listBranches: func(ctx context.Context) ([]git.Branch, error) {
+			return []git.Branch{{FullRef: "refs/heads/main", ShortName: "main", CommitHash: "oldhash"}}, nil
+		},
+		readBranchMetadata: func(ctx context.Context, branch, filePath string) (string, time.Time, []byte, error) {
+			return "newhash-" + branch, time.Unix(100, 0).UTC(), []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"echo ok"}]}`), nil
+		},
+	}
+	cfg := uiconfig.DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Branches = []string{"main"}
+	cfg.Tasks = serverAllowedTaskSpecs(
+		uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{
+			Artifacts: []uiconfig.ArtifactRuleConfig{{Path: "dist/*.html", Format: "file"}},
+		}},
+	)
+	server := NewServer(repo, cfg, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/git/branches", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var items []struct {
+		Tasks []struct {
+			Artifacts []struct {
+				Path         string `json:"path"`
+				Format       string `json:"format"`
+				NameTemplate string `json:"nameTemplate"`
+			} `json:"artifacts"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || len(items[0].Tasks) != 1 || len(items[0].Tasks[0].Artifacts) != 1 {
+		t.Fatalf("unexpected response: %+v", items)
+	}
+	if items[0].Tasks[0].Artifacts[0].Format != "file" {
+		t.Fatalf("artifact format = %q, want file", items[0].Tasks[0].Artifacts[0].Format)
+	}
+	if items[0].Tasks[0].Artifacts[0].NameTemplate != "" {
+		t.Fatalf("artifact nameTemplate = %q, want empty", items[0].Tasks[0].Artifacts[0].NameTemplate)
+	}
+}
+
 func TestHandleBranchTasksReturnsResolvedTaskLabelsForDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -284,6 +369,212 @@ func TestHandleBranchTasksUsesPreloadedCache(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s status = %d body=%s", path, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestHandleBranchTasksIncludesScheduleNextRunAt(t *testing.T) {
+	t.Parallel()
+
+	repo := &serverTestRepo{
+		basePath: t.TempDir(),
+		readBranchMetadata: func(ctx context.Context, branch, filePath string) (string, time.Time, []byte, error) {
+			return "hash-main", time.Unix(100, 0).UTC(), []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"echo ok"}]}`), nil
+		},
+	}
+	cfg := uiconfig.DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Branches = []string{"main"}
+	cfg.Tasks = serverAllowedTaskSpecs(
+		uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{Schedules: []uiconfig.TaskScheduleConfig{{
+			Cron:   "*/5 * * * *",
+			Branch: "main",
+		}}}},
+	)
+	server := NewServer(repo, cfg, nil, nil)
+	server.now = func() time.Time {
+		return time.Date(2026, time.April, 1, 10, 1, 0, 0, time.Local)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/git/branches/main/tasks", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body []struct {
+		Label     string `json:"label"`
+		Schedules []struct {
+			Cron      string `json:"cron"`
+			Branch    string `json:"branch"`
+			NextRunAt string `json:"nextRunAt"`
+		} `json:"schedules"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 1 || body[0].Label != "build" {
+		t.Fatalf("unexpected tasks payload: %+v", body)
+	}
+	if len(body[0].Schedules) != 1 {
+		t.Fatalf("unexpected schedules payload: %+v", body[0].Schedules)
+	}
+	want := time.Date(2026, time.April, 1, 10, 5, 0, 0, time.Local).Format(time.RFC3339)
+	if got := body[0].Schedules[0].NextRunAt; got != want {
+		t.Fatalf("nextRunAt = %q, want %q", got, want)
+	}
+}
+
+func TestHandleHeartbeatStartsDueScheduledRunAndIgnoresBodyOverrides(t *testing.T) {
+	t.Parallel()
+
+	var logBuffer bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasksJSON := []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"echo scheduled"}]}`)
+	repo := &serverTestRepo{
+		basePath: t.TempDir(),
+		readTasksJSON: func(ctx context.Context, branch string) ([]byte, error) {
+			if branch != "main" {
+				return nil, fmt.Errorf("unexpected branch %q", branch)
+			}
+			return tasksJSON, nil
+		},
+		prepareRunWorkspace: func(ctx context.Context, branch, workspacePath string, sparsePaths []string) (string, error) {
+			tasksDir := filepath.Join(workspacePath, ".vscode")
+			if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(filepath.Join(tasksDir, "tasks.json"), tasksJSON, 0o644); err != nil {
+				return "", err
+			}
+			return workspacePath, nil
+		},
+	}
+	cfg := uiconfig.DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Branches = []string{"main"}
+	cfg.Tasks = serverAllowedTaskSpecs(
+		uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{Schedules: []uiconfig.TaskScheduleConfig{{
+			Cron:   "*/5 * * * *",
+			Branch: "main",
+		}}}},
+	)
+	manager := NewTaskManager(repo, cfg, history)
+	state := NewLocalScheduleStateStore(t.TempDir())
+	scheduler := NewScheduler(repo, cfg, manager, state)
+	now := time.Date(2026, time.April, 1, 10, 10, 0, 0, time.Local)
+	scheduler.SetNow(func() time.Time { return now })
+	key := scheduledStateKey(scheduledCandidate{TaskLabel: "build", Branch: "main", Cron: "*/5 * * * *"})
+	if err := state.UpdateState(context.Background(), func(index *ScheduleStateIndex) error {
+		index.Items[key] = ScheduleState{LastEvaluatedAt: time.Date(2026, time.April, 1, 10, 0, 0, 0, time.Local)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(repo, cfg, manager, nil)
+	server.SetScheduler(scheduler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/heartbeat", strings.NewReader(`{"branch":"other","taskLabel":"other"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body HeartbeatResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Triggered != 1 || len(body.Runs) != 1 {
+		t.Fatalf("unexpected heartbeat result: %+v", body)
+	}
+	if body.Runs[0].Branch != "main" || body.Runs[0].TaskLabel != "build" {
+		t.Fatalf("heartbeat used request overrides unexpectedly: %+v", body.Runs[0])
+	}
+	if body.Runs[0].RunID == "" {
+		t.Fatalf("expected runId in heartbeat result: %+v", body.Runs[0])
+	}
+	metas, err := history.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 1 {
+		t.Fatalf("history runs = %d, want 1", len(metas))
+	}
+	if metas[0].Trigger != RunTriggerScheduled {
+		t.Fatalf("history trigger = %q, want %q", metas[0].Trigger, RunTriggerScheduled)
+	}
+	active := server.manager.GetActiveRunByID(body.Runs[0].RunID)
+	if active == nil {
+		t.Fatalf("expected active run %q", body.Runs[0].RunID)
+	}
+	<-active.done
+	logs := logBuffer.String()
+	if !strings.Contains(logs, `runtask scheduler starting run branch="main" task="build"`) {
+		t.Fatalf("expected scheduler start log, got %q", logs)
+	}
+	if !strings.Contains(logs, `runtask scheduler started run run_id="`) {
+		t.Fatalf("expected scheduler started log, got %q", logs)
+	}
+}
+
+func TestHandleHeartbeatReturnsNoopWhenNoSchedulesDue(t *testing.T) {
+	t.Parallel()
+
+	repo := &serverTestRepo{
+		basePath: t.TempDir(),
+		readTasksJSON: func(ctx context.Context, branch string) ([]byte, error) {
+			return []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"echo scheduled"}]}`), nil
+		},
+	}
+	cfg := uiconfig.DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Branches = []string{"main"}
+	cfg.Tasks = serverAllowedTaskSpecs(
+		uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{Schedules: []uiconfig.TaskScheduleConfig{{
+			Cron:   "*/5 * * * *",
+			Branch: "main",
+		}}}},
+	)
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewTaskManager(repo, cfg, history)
+	state := NewLocalScheduleStateStore(t.TempDir())
+	scheduler := NewScheduler(repo, cfg, manager, state)
+	scheduler.SetNow(func() time.Time {
+		return time.Date(2026, time.April, 1, 10, 0, 0, 0, time.Local)
+	})
+	server := NewServer(repo, cfg, manager, nil)
+	server.SetScheduler(scheduler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/heartbeat", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body HeartbeatResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Checked != 1 || body.Triggered != 0 {
+		t.Fatalf("unexpected heartbeat result: %+v", body)
 	}
 }
 
@@ -618,6 +909,7 @@ func TestHandleRunsPostReturnsPreinitializedTasks(t *testing.T) {
 	var body struct {
 		RunID     string `json:"runId"`
 		RunNumber int    `json:"runNumber"`
+		Trigger   string `json:"trigger"`
 		Tasks     []struct {
 			Label     string   `json:"label"`
 			Status    string   `json:"status"`
@@ -629,6 +921,9 @@ func TestHandleRunsPostReturnsPreinitializedTasks(t *testing.T) {
 	}
 	if body.RunID == "" || body.RunNumber == 0 {
 		t.Fatalf("unexpected response: %+v", body)
+	}
+	if body.Trigger != string(RunTriggerManual) {
+		t.Fatalf("trigger = %q, want %q", body.Trigger, RunTriggerManual)
 	}
 	if len(body.Tasks) != 4 {
 		t.Fatalf("tasks = %+v, want 4 entries", body.Tasks)
@@ -761,6 +1056,278 @@ func TestHandleRunArtifacts(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, items[0].CreatedAt); err != nil {
 		t.Fatalf("createdAt parse error: %v", err)
+	}
+}
+
+func TestHandleRunsListIncludesScheduledTrigger(t *testing.T) {
+	t.Parallel()
+
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &RunMeta{
+		RunID:     "run-scheduled-list",
+		RunKey:    "run-scheduled-list",
+		Branch:    "main",
+		TaskLabel: "build",
+		RunNumber: 1,
+		Status:    RunStatusSuccess,
+		StartTime: time.Date(2026, time.April, 1, 10, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, time.April, 1, 10, 1, 0, 0, time.UTC),
+		ExitCode:  0,
+		Trigger:   RunTriggerScheduled,
+	}
+	if err := history.WriteMeta(meta); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(nil, uiconfig.DefaultConfig(), NewTaskManager(nil, uiconfig.DefaultConfig(), history), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body []struct {
+		RunID   string `json:"runId"`
+		Trigger string `json:"trigger"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("runs = %d, want 1", len(body))
+	}
+	if body[0].RunID != meta.RunID || body[0].Trigger != string(RunTriggerScheduled) {
+		t.Fatalf("unexpected run list item: %+v", body[0])
+	}
+}
+
+func TestHandleRunsListReturnsETagAndHonorsIfNoneMatch(t *testing.T) {
+	t.Parallel()
+
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &RunMeta{
+		RunID:        "run-etag",
+		RunKey:       "run-etag",
+		Branch:       "main",
+		TaskLabel:    "build",
+		RunNumber:    1,
+		Status:       RunStatusSuccess,
+		StartTime:    time.Date(2026, time.April, 1, 10, 0, 0, 0, time.UTC),
+		EndTime:      time.Date(2026, time.April, 1, 10, 1, 0, 0, time.UTC),
+		ExitCode:     0,
+		User:         "alice",
+		Trigger:      RunTriggerManual,
+		HasArtifacts: true,
+	}
+	if err := history.WriteMeta(meta); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(nil, uiconfig.DefaultConfig(), NewTaskManager(nil, uiconfig.DefaultConfig(), history), nil)
+
+	firstReq := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	firstRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+	etag := firstRec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected ETag header")
+	}
+	if got := firstRec.Header().Get("Cache-Control"); got != "private, no-cache" {
+		t.Fatalf("cache-control = %q, want %q", got, "private, no-cache")
+	}
+
+	secondReq := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+	secondReq.Header.Set("If-None-Match", etag)
+	secondRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusNotModified {
+		t.Fatalf("status = %d body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	if body := secondRec.Body.String(); body != "" {
+		t.Fatalf("expected empty body for 304, got %q", body)
+	}
+}
+
+func TestNewServerDefaultsToAlwaysOnRuntimeMode(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, uiconfig.DefaultConfig(), nil, nil)
+	if server.runtimeMode != RuntimeModeAlwaysOn {
+		t.Fatalf("runtimeMode = %q, want %q", server.runtimeMode, RuntimeModeAlwaysOn)
+	}
+}
+
+func TestHandleRunStreamRejectedInServerlessMode(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, uiconfig.DefaultConfig(), nil, nil)
+	server.SetRuntimeMode(RuntimeModeServerless)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/stream", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "global live updates are disabled") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestHandleRunStreamReceivesCreatedAndFinishedEvents(t *testing.T) {
+	t.Parallel()
+
+	tasksJSON := []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"echo ok"}]}`)
+	repo := &serverTestRepo{
+		basePath: t.TempDir(),
+		readTasksJSON: func(ctx context.Context, branch string) ([]byte, error) {
+			return tasksJSON, nil
+		},
+		prepareRunWorkspace: func(ctx context.Context, branch, workspacePath string, sparsePaths []string) (string, error) {
+			tasksDir := filepath.Join(workspacePath, ".vscode")
+			if err := os.MkdirAll(tasksDir, 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(filepath.Join(tasksDir, "tasks.json"), tasksJSON, 0o644); err != nil {
+				return "", err
+			}
+			return workspacePath, nil
+		},
+	}
+	cfg := uiconfig.DefaultConfig()
+	cfg.Repository.Source = "/tmp/repo"
+	cfg.Branches = []string{"main"}
+	cfg.Tasks = serverAllowedTaskSpecs(
+		uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{}},
+	)
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewTaskManager(repo, cfg, history)
+	server := NewServer(repo, cfg, manager, nil)
+	server.SetRuntimeMode(RuntimeModeAlwaysOn)
+
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	streamResp, err := ts.Client().Get(ts.URL + "/api/runs/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResp.Body.Close()
+	if streamResp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d", streamResp.StatusCode)
+	}
+	reader := bufio.NewReader(streamResp.Body)
+
+	postReq, err := http.NewRequest(http.MethodPost, ts.URL+"/api/runs", strings.NewReader(`{"branch":"main","taskLabel":"build"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postResp, err := ts.Client().Do(postReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer postResp.Body.Close()
+	if postResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", postResp.StatusCode)
+	}
+	var started struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.NewDecoder(postResp.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+
+	eventType, payload := readSSEEvent(t, reader)
+	if eventType != string(runEventCreated) {
+		t.Fatalf("eventType = %q, want %q", eventType, runEventCreated)
+	}
+	var created RunMeta
+	if err := json.Unmarshal([]byte(payload), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.RunID != started.RunID || created.Status != RunStatusRunning {
+		t.Fatalf("unexpected created payload: %+v", created)
+	}
+
+	active := manager.GetActiveRunByID(started.RunID)
+	if active == nil {
+		t.Fatalf("expected active run %q", started.RunID)
+	}
+	<-active.done
+
+	for {
+		eventType, payload = readSSEEvent(t, reader)
+		if eventType != string(runEventFinished) {
+			continue
+		}
+		var finished RunMeta
+		if err := json.Unmarshal([]byte(payload), &finished); err != nil {
+			t.Fatal(err)
+		}
+		if finished.RunID != started.RunID {
+			continue
+		}
+		if finished.Status != RunStatusSuccess {
+			t.Fatalf("unexpected finished payload: %+v", finished)
+		}
+		break
+	}
+}
+
+func TestHandleRunDetailIncludesTrigger(t *testing.T) {
+	t.Parallel()
+
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &RunMeta{
+		RunID:     "run-detail-trigger",
+		RunKey:    "run-detail-trigger",
+		Branch:    "main",
+		TaskLabel: "deploy",
+		RunNumber: 1,
+		Status:    RunStatusSuccess,
+		StartTime: time.Date(2026, time.April, 1, 10, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, time.April, 1, 10, 2, 0, 0, time.UTC),
+		ExitCode:  0,
+		Trigger:   RunTriggerScheduled,
+	}
+	if err := history.WriteMeta(meta); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(nil, uiconfig.DefaultConfig(), NewTaskManager(nil, uiconfig.DefaultConfig(), history), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/run-detail-trigger", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		RunID   string `json:"runId"`
+		Trigger string `json:"trigger"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RunID != meta.RunID || body.Trigger != string(RunTriggerScheduled) {
+		t.Fatalf("unexpected run detail: %+v", body)
 	}
 }
 

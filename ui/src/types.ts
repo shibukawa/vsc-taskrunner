@@ -22,6 +22,9 @@ export type TaskInput = {
   options?: TaskInputOption[]
 }
 
+export type RunTrigger = 'manual' | 'scheduled'
+export type RuntimeMode = 'always-on' | 'serverless'
+
 export type BranchTask = {
   label: string
   type: string
@@ -35,8 +38,16 @@ export type BranchTask = {
   worktree?: TaskWorktree
   preRunTasks?: PreRunTask[]
   artifacts?: ArtifactRule[]
+  schedules?: TaskSchedule[]
   taskFilePath?: string
   resolvedTaskLabels?: string[]
+}
+
+export type TaskSchedule = {
+  cron: string
+  branch: string
+  nextRunAt?: string
+  inputValues?: Record<string, string>
 }
 
 export type TaskWorktree = {
@@ -104,6 +115,7 @@ export type RunMeta = {
   commitHash?: string
   user?: string
   tokenLabel?: string
+  trigger?: RunTrigger
   inputValues?: Record<string, string>
   tasks?: TaskRun[]
   hasArtifacts?: boolean
@@ -123,6 +135,7 @@ export type RunStartResponse = {
   exitCode: number
   user?: string
   tokenLabel?: string
+  trigger?: RunTrigger
   inputValues?: Record<string, string>
   tasks?: TaskRun[]
 }
@@ -135,6 +148,7 @@ export type MeResponse = {
   isAdmin?: boolean
   canManageTokens?: boolean
   apiTokensEnabled?: boolean
+  runtimeMode?: RuntimeMode
 }
 
 export type APITokenItem = {
@@ -199,6 +213,7 @@ export type SettingsStoreSummary = {
 }
 
 export type SettingsSummary = {
+  runtimeMode: RuntimeMode
   repository: {
     source: string
     cachePath: string

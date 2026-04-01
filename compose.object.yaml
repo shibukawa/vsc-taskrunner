@@ -67,17 +67,21 @@ services:
       - ui
       - --config
       - /app/config/runtask-ui.object.yaml
+      - --runtime-mode
+      - serverless
     working_dir: /app
     environment:
       # When using local rustfs in docker-compose, set the public endpoint
       # used in presigned URLs. Example: http://localhost:9000
       RUNTASK_RUSTFS_OBJECT_PUBLIC_ENDPOINT: "http://localhost:9000"
       RUNTASK_EPHEMERAL_EMULATION_IDLE: 1m
+    # This sample uses object storage plus external heartbeat polling,
+    # so it runs the UI in serverless mode.
     ports:
       - "8080:8080"
     volumes:
+      - ../vsc-taskrunner-demo:/workspace/demo:ro
       - ./runtask-ui.object.yaml:/app/config/runtask-ui.object.yaml:ro
-      - runtask-repos:/var/lib/runtask/repos
     extra_hosts:
       - "oidc.localhost:host-gateway"
     depends_on:
@@ -86,7 +90,23 @@ services:
       rustfs-init:
         condition: service_completed_successfully
 
+  heartbeat:
+    image: curlimages/curl:8.16.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        until curl -fsS http://runtask-ui:8080/api/health >/dev/null; do
+          sleep 5
+        done
+        while :; do
+          curl -fsS http://runtask-ui:8080/api/heartbeat >/dev/null
+          sleep 300
+        done
+    depends_on:
+      runtask-ui:
+        condition: service_healthy
+
 volumes:
-  runtask-repos:
   rustfs-single-data:
   rustfs-logs:

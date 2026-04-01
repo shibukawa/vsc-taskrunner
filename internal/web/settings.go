@@ -10,11 +10,12 @@ import (
 )
 
 type settingsSummaryResponse struct {
-	Repository settingsRepositorySummary `json:"repository"`
-	Auth       settingsAuthSummary       `json:"auth"`
-	Execution  settingsExecutionSummary  `json:"execution"`
-	Metrics    settingsMetricsSummary    `json:"metrics"`
-	Storage    settingsStorageSummary    `json:"storage"`
+	RuntimeMode RuntimeMode               `json:"runtimeMode"`
+	Repository  settingsRepositorySummary `json:"repository"`
+	Auth        settingsAuthSummary       `json:"auth"`
+	Execution   settingsExecutionSummary  `json:"execution"`
+	Metrics     settingsMetricsSummary    `json:"metrics"`
+	Storage     settingsStorageSummary    `json:"storage"`
 }
 
 type settingsRepositorySummary struct {
@@ -92,6 +93,7 @@ func (s *Server) settingsSummary() settingsSummaryResponse {
 	}
 
 	return settingsSummaryResponse{
+		RuntimeMode: s.runtimeMode,
 		Repository: settingsRepositorySummary{
 			Source:                paths.RepositorySource,
 			CachePath:             paths.CachePath,

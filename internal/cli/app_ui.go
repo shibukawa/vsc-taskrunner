@@ -32,6 +32,7 @@ func (a *App) runUI(args []string) int {
 	var port int
 	var noAuth bool
 	var openBrowser bool
+	var runtimeMode string
 	var redactNames multiValueFlag
 	var redactTokens multiValueFlag
 
@@ -41,6 +42,7 @@ func (a *App) runUI(args []string) int {
 	fs.IntVar(&port, "port", 0, "override bind port")
 	fs.BoolVar(&noAuth, "no-auth", false, "disable authentication")
 	fs.BoolVar(&openBrowser, "open", false, "open UI in browser")
+	fs.StringVar(&runtimeMode, "runtime-mode", web.RuntimeModeAlwaysOn.String(), "runtime mode: always-on or serverless")
 	fs.Var(&redactNames, "redact-name", "extra secret-like env/input name to redact; repeatable")
 	fs.Var(&redactTokens, "redact-token", "extra secret-like env/input token to redact; repeatable")
 
@@ -61,6 +63,12 @@ func (a *App) runUI(args []string) int {
 	}
 	if noAuth {
 		cfg.Auth.NoAuth = true
+	}
+	switch mode := web.RuntimeMode(runtimeMode); mode {
+	case web.RuntimeModeAlwaysOn, web.RuntimeModeServerless:
+	default:
+		fmt.Fprintf(a.stderr, "invalid runtime mode %q: must be always-on or serverless\n", runtimeMode)
+		return 2
 	}
 	cfg.Logging.Redaction.Names = append(cfg.Logging.Redaction.Names, []string(redactNames)...)
 	cfg.Logging.Redaction.Tokens = append(cfg.Logging.Redaction.Tokens, []string(redactTokens)...)
@@ -89,6 +97,12 @@ func (a *App) runUI(args []string) int {
 	log.Printf("runtask startup cleanup completed cache=%q history=%q", store.BasePath(), historyDir)
 
 	manager := web.NewTaskManager(store, cfg, history)
+	scheduleStateStore, scheduleStoreKind, err := newScheduleStateStoreWithKind(context.Background(), historyDir, cfg)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	scheduler := web.NewScheduler(store, cfg, manager, scheduleStateStore)
 	authenticator, err := web.NewAuthenticator(cfg)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
@@ -104,6 +118,10 @@ func (a *App) runUI(args []string) int {
 		log.Printf("runtask startup api token store=%q", storeKind)
 	}
 	server := web.NewServer(store, cfg, manager, authenticator)
+	server.SetRuntimeMode(web.RuntimeMode(runtimeMode))
+	server.SetScheduler(scheduler)
+	log.Printf("runtask startup schedule state store=%q", scheduleStoreKind)
+	go scheduler.RunLoop(context.Background())
 	go func() {
 		if err := server.WarmBranchMetadata(context.Background()); err != nil {
 			log.Printf("runtask startup branch preload failed: %v", err)
@@ -295,5 +313,28 @@ func newHistoryStoreWithKinds(ctx context.Context, historyDir string, cfg *uicon
 		return history, "*web.ObjectIndexStore", "*web.ObjectRunStore", err
 	default:
 		return nil, "", "", fmt.Errorf("unsupported storage backend %q", cfg.Storage.Backend)
+	}
+}
+
+func newScheduleStateStoreWithKind(ctx context.Context, historyDir string, cfg *uiconfig.UIConfig) (web.ScheduleStateStore, string, error) {
+	switch cfg.Storage.Backend {
+	case "", "local":
+		return web.NewLocalScheduleStateStore(historyDir), "*web.LocalScheduleStateStore", nil
+	case "object":
+		store, err := web.NewObjectScheduleStateStore(ctx, web.ObjectIndexStoreOptions{
+			Endpoint:       cfg.Storage.Object.Endpoint,
+			Bucket:         cfg.Storage.Object.Bucket,
+			Region:         cfg.Storage.Object.Region,
+			AccessKey:      cfg.Storage.Object.AccessKey,
+			SecretKey:      cfg.Storage.Object.SecretKey,
+			Prefix:         cfg.Storage.Object.Prefix,
+			ForcePathStyle: cfg.Storage.Object.ForcePathStyle,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return store, "*web.ObjectScheduleStateStore", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported storage backend %q", cfg.Storage.Backend)
 	}
 }

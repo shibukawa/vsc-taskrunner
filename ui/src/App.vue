@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   Branch, BranchTask, TaskInput, TaskRun, ArtifactItem, RunMeta,
   RunStartResponse, MeResponse, RouteState, SSETaskEvent,
-  MetricsSnapshot, APITokenItem, APITokenCreateResponse, SettingsSummary,
+  MetricsSnapshot, APITokenItem, APITokenCreateResponse, SettingsSummary, RuntimeMode,
 } from './types'
 import { parseAnsiToSegments } from './ansi'
 import BackgroundEffect from './components/BackgroundEffect.vue'
@@ -42,6 +42,7 @@ const canRun = ref(true)
 const isAdmin = ref(false)
 const canManageTokens = ref(false)
 const apiTokensEnabled = ref(false)
+const runtimeMode = ref<RuntimeMode>('always-on')
 const routeNotFound = ref(false)
 const backgroundPaused = ref(false)
 const tokenManagerOpen = ref(false)
@@ -69,7 +70,10 @@ let copiedCurlTimer: number | null = null
 
 let source: EventSource | null = null
 let metricsSource: EventSource | null = null
+let globalRunSource: EventSource | null = null
 let isApplyingRoute = false
+let runsPollTimer: number | null = null
+const runsETag = ref<string | null>(null)
 
 const selectedTaskDef = computed(() => tasks.value.find((task) => task.label === selectedTask.value) ?? null)
 const currentRunTaskDef = computed(() => {
@@ -290,6 +294,7 @@ async function loadMe() {
   isAdmin.value = false
   canManageTokens.value = false
   apiTokensEnabled.value = false
+  runtimeMode.value = 'always-on'
 
   try {
     const me = await api<MeResponse>('/api/me')
@@ -301,6 +306,7 @@ async function loadMe() {
     isAdmin.value = me.isAdmin ?? false
     canManageTokens.value = me.canManageTokens ?? false
     apiTokensEnabled.value = me.apiTokensEnabled ?? false
+    runtimeMode.value = me.runtimeMode ?? 'always-on'
   } catch (error) {
     const message = asErrorMessage(error)
     if (isUnauthorizedMessage(message)) {
@@ -727,7 +733,23 @@ async function loadTasksForBranch(branch: string | null) {
 }
 
 async function loadRuns() {
-  const data = await api<unknown>('/api/runs')
+  const headers: HeadersInit = {}
+  if (runsETag.value) {
+    headers['If-None-Match'] = runsETag.value
+  }
+  const response = await fetch('/api/runs', {
+    method: 'GET',
+    headers,
+  })
+  if (response.status === 304) {
+    return
+  }
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`${response.status}:${body || response.statusText}`)
+  }
+  runsETag.value = response.headers.get('ETag')
+  const data = await response.json()
   runs.value = Array.isArray(data) ? (data as RunMeta[]) : []
 }
 
@@ -753,6 +775,93 @@ function stopMetricsStream() {
     metricsSource.close()
     metricsSource = null
   }
+}
+
+function stopGlobalRunStream() {
+  if (globalRunSource) {
+    globalRunSource.close()
+    globalRunSource = null
+  }
+}
+
+function sortRuns(items: RunMeta[]): RunMeta[] {
+  return [...items].sort((left, right) => {
+    const leftTime = new Date(left.startTime).getTime()
+    const rightTime = new Date(right.startTime).getTime()
+    if (leftTime === rightTime) {
+      return right.runKey.localeCompare(left.runKey)
+    }
+    return rightTime - leftTime
+  })
+}
+
+function upsertRunSummary(run: RunMeta) {
+  const next = [...runs.value]
+  const index = next.findIndex((item) => item.runId === run.runId)
+  if (index >= 0) {
+    next[index] = { ...next[index], ...run }
+  } else {
+    next.unshift(run)
+  }
+  runs.value = sortRuns(next)
+}
+
+function startRunsPolling() {
+  stopRunsPolling()
+  if (typeof window === 'undefined') {
+    return
+  }
+  runsPollTimer = window.setInterval(() => {
+    if (document.hidden) {
+      return
+    }
+    void loadRuns().catch((error) => {
+      console.error('Failed to refresh runs', error)
+    })
+  }, 15000)
+}
+
+function stopRunsPolling() {
+  if (runsPollTimer !== null) {
+    window.clearInterval(runsPollTimer)
+    runsPollTimer = null
+  }
+}
+
+function startGlobalRunStream() {
+  stopGlobalRunStream()
+  if (runtimeMode.value !== 'always-on') {
+    return
+  }
+  globalRunSource = new EventSource('/api/runs/stream')
+  const handleMessage = (raw: Event) => {
+    const message = raw as MessageEvent
+    const run = JSON.parse(message.data) as RunMeta
+    upsertRunSummary(run)
+    if (message.type === 'run-finished' && currentRun.value?.runId === run.runId) {
+      void loadRunDetail(run.runId)
+      void loadArtifacts(run.runId)
+    }
+  }
+  globalRunSource.addEventListener('run-created', handleMessage)
+  globalRunSource.addEventListener('run-updated', handleMessage)
+  globalRunSource.addEventListener('run-finished', handleMessage)
+}
+
+async function handleVisibilityChange() {
+  if (typeof document === 'undefined') {
+    return
+  }
+  if (document.hidden) {
+    stopGlobalRunStream()
+    return
+  }
+  await loadRuns()
+  startGlobalRunStream()
+}
+
+function onVisibilityChange() {
+  void handleVisibilityChange()
 }
 
 function closeRunDialog() {
@@ -881,6 +990,7 @@ async function submitRun(branch: string, taskLabel: string, values: Record<strin
       endTime: response.endTime,
       exitCode: response.exitCode,
       user: response.user,
+      trigger: response.trigger,
       inputValues: response.inputValues,
       tasks: response.tasks,
     }
@@ -1198,15 +1308,20 @@ onMounted(async () => {
   }
   if (!authRequired.value) {
     await initializeFromRoute(parseRoute(window.location.pathname))
+    startRunsPolling()
+    startGlobalRunStream()
     startMetricsStream()
     window.addEventListener('popstate', handlePopState)
     window.addEventListener('keydown', handleKeydown)
+    document.addEventListener('visibilitychange', onVisibilityChange)
   }
 })
 
 onBeforeUnmount(() => {
   stopLogStream()
   stopMetricsStream()
+  stopGlobalRunStream()
+  stopRunsPolling()
   if (copiedTokenTimer !== null) {
     window.clearTimeout(copiedTokenTimer)
   }
@@ -1215,6 +1330,7 @@ onBeforeUnmount(() => {
   }
   window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 
@@ -1490,6 +1606,8 @@ onBeforeUnmount(() => {
               <article class="artifact-card settings-section">
                 <strong>Execution</strong>
                 <dl class="settings-list">
+                  <dt>Runtime mode</dt>
+                  <dd>{{ settingsSummary.runtimeMode }}</dd>
                   <dt>Max parallel runs</dt>
                   <dd>{{ settingsSummary.execution.maxParallelRuns }}</dd>
                 </dl>

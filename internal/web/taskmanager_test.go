@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -665,6 +666,58 @@ func TestCollectArtifactsAsFilesWithExplicitFile(t *testing.T) {
 	}
 }
 
+func TestCollectArtifactsAsFilesWildcardKeepsMatchedRelativePaths(t *testing.T) {
+	t.Parallel()
+
+	worktree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktree, "dist", "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "dist", "index.html"), []byte("demo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "dist", "assets", "app.js"), []byte("console.log('demo')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := &TaskManager{
+		config: &uiconfig.UIConfig{
+			Tasks: allowedTaskSpecs(
+				uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{Artifacts: []uiconfig.ArtifactRuleConfig{{Path: "dist/*.html", Format: "file"}, {Path: "dist/assets/*.js", Format: "file"}}}},
+			),
+		},
+		history: history,
+	}
+
+	refs, err := tm.collectArtifacts(&RunMeta{
+		RunID:     "run-file-wildcard",
+		Branch:    "main",
+		TaskLabel: "build",
+		StartTime: time.Date(2026, time.March, 28, 10, 0, 0, 0, time.UTC),
+	}, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("artifact refs = %d, want 2", len(refs))
+	}
+	got := []string{refs[0].Dest, refs[1].Dest}
+	sort.Strings(got)
+	if got[0] != "app.js" || got[1] != "index.html" {
+		t.Fatalf("unexpected refs: %+v", refs)
+	}
+	if _, err := os.Stat(filepath.Join(history.ArtifactDir("run-file-wildcard"), "index.html")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(history.ArtifactDir("run-file-wildcard"), "app.js")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCollectArtifactsAsFilesRejectsDirectoryPattern(t *testing.T) {
 	t.Parallel()
 
@@ -814,6 +867,54 @@ func TestCollectArtifactsZipResolvesTemplate(t *testing.T) {
 	}
 	if !strings.HasSuffix(base, meta.CommitHash) {
 		t.Fatalf("archive name = %q, want long hash suffix %q", refs[0].Dest, meta.CommitHash)
+	}
+}
+
+func TestCollectArtifactsZipResolvesInputPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	worktree := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(worktree, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "dist", "index.html"), []byte("demo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	history, err := NewHistoryStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := &TaskManager{
+		config: &uiconfig.UIConfig{
+			Tasks: allowedTaskSpecs(
+				uiconfig.AllowedTaskSpec{Pattern: "build", Config: uiconfig.TaskUIConfig{
+					Artifacts: []uiconfig.ArtifactRuleConfig{{
+						Path:         "dist",
+						Format:       "zip",
+						NameTemplate: "frontend-{input:env}-{input:missing}.zip",
+					}},
+				}},
+			),
+		},
+		history: history,
+	}
+
+	refs, err := tm.collectArtifacts(&RunMeta{
+		RunID:       "run-input-template",
+		Branch:      "main",
+		TaskLabel:   "build",
+		RunNumber:   1,
+		StartTime:   time.Date(2026, time.March, 28, 10, 0, 0, 0, time.UTC),
+		InputValues: map[string]string{"env": "prod/east"},
+	}, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("artifact refs = %d, want 1", len(refs))
+	}
+	if got, want := refs[0].Dest, "frontend-prod-east-unknown.zip"; got != want {
+		t.Fatalf("archive name = %q, want %q", got, want)
 	}
 }
 

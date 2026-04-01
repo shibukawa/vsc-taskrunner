@@ -256,6 +256,10 @@ function formatDurationMilliseconds(milliseconds: number | null): string {
   return `${minutes}m ${remain}s`
 }
 
+function runTriggerLabel(trigger?: RunMeta['trigger']): string {
+  return trigger === 'scheduled' ? 'Scheduled' : 'Manual'
+}
+
 const timelineWindow = computed<TimelineWindow>(() => {
   const taskStartTimes = orderedRunTasks.value
     .map((task) => parseTime(task.startTime))
@@ -291,6 +295,7 @@ const summaryRows = computed<SummaryRow[]>(() => {
   }
   const rows: SummaryRow[] = [
     { label: 'User', value: props.currentRun.user || 'anonymous' },
+    { label: 'Trigger', value: runTriggerLabel(props.currentRun.trigger) },
     { label: 'Started', value: formatDateTime(props.currentRun.startTime) },
     { label: 'Duration', value: formatDurationMilliseconds(timelineWindow.value.duration) },
     { label: 'Exit Code', value: String(props.currentRun.exitCode) },

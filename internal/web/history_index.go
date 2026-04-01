@@ -11,19 +11,20 @@ import (
 const historyIndexObjectName = "run-history-index.json"
 
 type RunHistorySummary struct {
-	RunID        string    `json:"runId"`
-	RunKey       string    `json:"runKey"`
-	Branch       string    `json:"branch"`
-	TaskLabel    string    `json:"taskLabel"`
-	RunNumber    int       `json:"runNumber"`
-	Status       RunStatus `json:"status"`
-	StartTime    time.Time `json:"startTime"`
-	EndTime      time.Time `json:"endTime,omitempty"`
-	ExitCode     int       `json:"exitCode"`
-	WorktreeKept bool      `json:"worktreeKept"`
-	User         string    `json:"user,omitempty"`
-	TokenLabel   string    `json:"tokenLabel,omitempty"`
-	HasArtifacts bool      `json:"hasArtifacts,omitempty"`
+	RunID        string     `json:"runId"`
+	RunKey       string     `json:"runKey"`
+	Branch       string     `json:"branch"`
+	TaskLabel    string     `json:"taskLabel"`
+	RunNumber    int        `json:"runNumber"`
+	Status       RunStatus  `json:"status"`
+	StartTime    time.Time  `json:"startTime"`
+	EndTime      time.Time  `json:"endTime,omitempty"`
+	ExitCode     int        `json:"exitCode"`
+	WorktreeKept bool       `json:"worktreeKept"`
+	User         string     `json:"user,omitempty"`
+	TokenLabel   string     `json:"tokenLabel,omitempty"`
+	Trigger      RunTrigger `json:"trigger"`
+	HasArtifacts bool       `json:"hasArtifacts,omitempty"`
 }
 
 type RunHistoryGroup struct {
@@ -62,7 +63,7 @@ func (idx *RunHistoryIndex) ensureGroup(branch, taskLabel string) *RunHistoryGro
 	return group
 }
 
-func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, tokenLabel, runID string) *RunHistorySummary {
+func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, tokenLabel string, trigger RunTrigger, runID string) *RunHistorySummary {
 	group := idx.ensureGroup(branch, taskLabel)
 	runNumber := group.NextRunNumber
 	if runNumber < 1 {
@@ -81,12 +82,14 @@ func (idx *RunHistoryIndex) startRun(branch, taskLabel, user, tokenLabel, runID 
 		WorktreeKept: false,
 		User:         user,
 		TokenLabel:   tokenLabel,
+		Trigger:      normalizeRunTrigger(trigger),
 	}
 	group.Runs = append([]*RunHistorySummary{summary}, group.Runs...)
 	return summary
 }
 
 func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
+	meta.ensureTrigger()
 	group := idx.ensureGroup(meta.Branch, meta.TaskLabel)
 	for _, run := range group.Runs {
 		if run.RunID != meta.RunID {
@@ -100,6 +103,7 @@ func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
 		run.WorktreeKept = meta.WorktreeKept
 		run.User = meta.User
 		run.TokenLabel = meta.TokenLabel
+		run.Trigger = meta.Trigger
 		run.HasArtifacts = len(meta.Artifacts) > 0
 		run.RunKey = meta.RunKey
 		return trimCompletedHistoryGroup(group, keepCount)
@@ -118,6 +122,7 @@ func (idx *RunHistoryIndex) updateRun(meta *RunMeta, keepCount int) []string {
 		WorktreeKept: meta.WorktreeKept,
 		User:         meta.User,
 		TokenLabel:   meta.TokenLabel,
+		Trigger:      meta.Trigger,
 		HasArtifacts: len(meta.Artifacts) > 0,
 	}}, group.Runs...)
 	return trimCompletedHistoryGroup(group, keepCount)
@@ -158,6 +163,7 @@ func (idx *RunHistoryIndex) listRuns() []*RunMeta {
 				WorktreeKept: run.WorktreeKept,
 				User:         run.User,
 				TokenLabel:   run.TokenLabel,
+				Trigger:      normalizeRunTrigger(run.Trigger),
 				HasArtifacts: run.HasArtifacts,
 			})
 		}

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"vsc-taskrunner/internal/git"
 	"vsc-taskrunner/internal/tasks"
 	"vsc-taskrunner/internal/uiconfig"
@@ -25,12 +27,16 @@ import (
 
 // Server holds the HTTP state for the runtask web UI.
 type Server struct {
-	repo    git.RepositoryStore
-	config  *uiconfig.UIConfig
-	manager *TaskManager
-	auth    *Authenticator
-	metrics *MetricsService
-	mux     *http.ServeMux
+	repo        git.RepositoryStore
+	config      *uiconfig.UIConfig
+	manager     *TaskManager
+	auth        *Authenticator
+	scheduler   *Scheduler
+	metrics     *MetricsService
+	mux         *http.ServeMux
+	now         func() time.Time
+	runtimeMode RuntimeMode
+	runEvents   *runEventBroker
 
 	branchMetaMu    sync.RWMutex
 	branchMetaCache map[string]branchAPIItem
@@ -56,8 +62,16 @@ type branchTaskResponse struct {
 	Worktree           *taskWorktreeResponse  `json:"worktree,omitempty"`
 	PreRunTasks        []preRunTaskResponse   `json:"preRunTasks,omitempty"`
 	Artifacts          []artifactRuleResponse `json:"artifacts,omitempty"`
+	Schedules          []scheduleResponse     `json:"schedules,omitempty"`
 	TaskFilePath       string                 `json:"taskFilePath,omitempty"`
 	ResolvedTaskLabels []string               `json:"resolvedTaskLabels,omitempty"`
+}
+
+type scheduleResponse struct {
+	Cron        string            `json:"cron"`
+	Branch      string            `json:"branch"`
+	NextRunAt   string            `json:"nextRunAt,omitempty"`
+	InputValues map[string]string `json:"inputValues,omitempty"`
 }
 
 type taskWorktreeResponse struct {
@@ -104,11 +118,32 @@ func NewServer(repo git.RepositoryStore, config *uiconfig.UIConfig, manager *Tas
 		auth:                   auth,
 		metrics:                newMetricsService(config, manager),
 		mux:                    http.NewServeMux(),
+		now:                    time.Now,
+		runtimeMode:            RuntimeModeAlwaysOn,
+		runEvents:              newRunEventBroker(),
 		branchMetaCache:        make(map[string]branchAPIItem),
 		ephemeralEmulationIdle: loadEphemeralEmulationIdle(),
 	}
+	if manager != nil {
+		manager.SetRunEventListener(s.publishRunEvent)
+	}
 	s.routes()
 	return s
+}
+
+func (s *Server) SetScheduler(scheduler *Scheduler) {
+	s.scheduler = scheduler
+}
+
+func (s *Server) SetRuntimeMode(mode RuntimeMode) {
+	s.runtimeMode = normalizeRuntimeMode(string(mode))
+}
+
+func (s *Server) currentTime() time.Time {
+	if s != nil && s.now != nil {
+		return s.now().In(time.Local)
+	}
+	return time.Now().In(time.Local)
 }
 
 // Handler returns the root HTTP handler.
@@ -130,6 +165,8 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.handleHealth)
+	s.mux.HandleFunc("GET /api/heartbeat", s.handleHeartbeat)
+	s.mux.HandleFunc("POST /api/heartbeat", s.handleHeartbeat)
 	s.mux.HandleFunc("/", s.handleStatic)
 
 	if s.auth != nil && s.auth.Enabled() {
@@ -161,6 +198,7 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("GET /api/git/branches/{branch}/tasks", sessionOnly(s.handleBranchTasks))
 		s.mux.HandleFunc("GET /api/runs", apiRead(s.handleRuns))
 		s.mux.HandleFunc("POST /api/runs", apiWrite(s.handleRuns))
+		s.mux.HandleFunc("GET /api/runs/stream", apiRead(s.handleRunStream))
 		s.mux.HandleFunc("GET /api/metrics/stream", sessionOnly(s.handleMetricsStream))
 		s.mux.HandleFunc("POST /api/cleanup", sessionOnly(s.handleCleanup))
 		s.registerRunRoutes(apiRead)
@@ -179,9 +217,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/git/branches/{branch}/tasks", s.handleBranchTasks)
 	s.mux.HandleFunc("GET /api/runs", s.handleRuns)
 	s.mux.HandleFunc("POST /api/runs", s.handleRuns)
+	s.mux.HandleFunc("GET /api/runs/stream", s.handleRunStream)
 	s.mux.HandleFunc("GET /api/metrics/stream", s.handleMetricsStream)
 	s.mux.HandleFunc("POST /api/cleanup", s.handleCleanup)
 	s.registerRunRoutes(func(next http.HandlerFunc) http.HandlerFunc { return next })
+}
+
+func (s *Server) publishRunEvent(eventType runEventType, meta *RunMeta) {
+	if s == nil || s.runEvents == nil || s.runtimeMode != RuntimeModeAlwaysOn {
+		return
+	}
+	s.runEvents.broadcast(eventType, meta)
 }
 
 func (s *Server) registerRunRoutes(wrap func(http.HandlerFunc) http.HandlerFunc) {
@@ -225,6 +271,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"isAdmin":          false,
 			"canManageTokens":  false,
 			"apiTokensEnabled": false,
+			"runtimeMode":      s.runtimeMode,
 		})
 		return
 	}
@@ -236,6 +283,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"isAdmin":          s.config.IsAdminUser(claims),
 		"canManageTokens":  AuthMethodFromContext(r.Context()) == AuthMethodSession && s.config.CanManageTokens(claims) && s.auth != nil && s.auth.TokenService() != nil && s.auth.TokenService().Enabled(),
 		"apiTokensEnabled": s.auth != nil && s.auth.TokenService() != nil && s.auth.TokenService().Enabled(),
+		"runtimeMode":      s.runtimeMode,
 	})
 }
 
@@ -397,7 +445,7 @@ func (s *Server) resolveBranchMetadata(ctx context.Context, branch git.Branch) (
 	item.CommitHash = commitHash
 	item.CommitDate = commitDate.Format(time.RFC3339)
 	workspaceRoot := filepath.Dir(filepath.Dir(taskFile))
-	items, err := loadBranchTasks(data, taskFile, workspaceRoot, s.config)
+	items, err := loadBranchTasks(data, branch.ShortName, taskFile, workspaceRoot, s.config, s.currentTime())
 	if err != nil {
 		item.LoadError = err.Error()
 		log.Printf("runtask branch preload parse failed branch=%q error=%v", branch.ShortName, err)
@@ -407,7 +455,7 @@ func (s *Server) resolveBranchMetadata(ctx context.Context, branch git.Branch) (
 	return item, nil
 }
 
-func loadBranchTasks(data []byte, tasksPath string, workspaceRoot string, cfg *uiconfig.UIConfig) ([]branchTaskResponse, error) {
+func loadBranchTasks(data []byte, branch string, tasksPath string, workspaceRoot string, cfg *uiconfig.UIConfig, now time.Time) ([]branchTaskResponse, error) {
 	loadOptions := tasks.LoadOptions{
 		Path:          tasksPath,
 		WorkspaceRoot: workspaceRoot,
@@ -445,6 +493,7 @@ func loadBranchTasks(data []byte, tasksPath string, workspaceRoot string, cfg *u
 			Worktree:           buildTaskWorktreeResponse(taskCfg.Worktree),
 			PreRunTasks:        buildPreRunTaskResponses(taskCfg.PreRunTasks),
 			Artifacts:          buildArtifactRuleResponses(taskCfg.Artifacts),
+			Schedules:          buildScheduleResponses(taskCfg.Schedules, branch, now),
 			TaskFilePath:       tasksPath,
 			ResolvedTaskLabels: resolvedTaskLabels,
 		})
@@ -485,6 +534,33 @@ func buildArtifactRuleResponses(items []uiconfig.ArtifactRuleConfig) []artifactR
 			Format:       item.Format,
 			NameTemplate: item.NameTemplate,
 		})
+	}
+	return resp
+}
+
+func buildScheduleResponses(items []uiconfig.TaskScheduleConfig, branch string, now time.Time) []scheduleResponse {
+	if len(items) == 0 {
+		return nil
+	}
+	resp := make([]scheduleResponse, 0, len(items))
+	for _, item := range items {
+		if item.Branch != branch {
+			continue
+		}
+		entry := scheduleResponse{
+			Cron:   item.Cron,
+			Branch: item.Branch,
+		}
+		if schedule, err := cron.ParseStandard(strings.TrimSpace(item.Cron)); err == nil {
+			entry.NextRunAt = schedule.Next(now.In(time.Local)).Format(time.RFC3339)
+		}
+		if len(item.InputValues) > 0 {
+			entry.InputValues = cloneStringMap(item.InputValues)
+		}
+		resp = append(resp, entry)
+	}
+	if len(resp) == 0 {
+		return nil
 	}
 	return resp
 }
@@ -611,6 +687,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		if metas == nil {
 			metas = []*RunMeta{}
 		}
+		etag := fmt.Sprintf(`W/"%s"`, runsETag(metas))
+		w.Header().Set("Cache-Control", "private, no-cache")
+		w.Header().Set("ETag", etag)
+		if etagMatches(r.Header.Get("If-None-Match"), etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		s.writeJSON(w, http.StatusOK, metas)
 	case http.MethodPost:
 		var req struct {
@@ -664,6 +747,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			ExitCode   int            `json:"exitCode"`
 			User       string         `json:"user,omitempty"`
 			TokenLabel string         `json:"tokenLabel,omitempty"`
+			Trigger    RunTrigger     `json:"trigger"`
 			Tasks      []*TaskRunMeta `json:"tasks,omitempty"`
 		}
 		var endTime *time.Time
@@ -683,11 +767,37 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			ExitCode:   meta.ExitCode,
 			User:       meta.User,
 			TokenLabel: meta.TokenLabel,
+			Trigger:    meta.Trigger,
 			Tasks:      meta.Tasks,
 		})
 	default:
 		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
+	if s.runtimeMode != RuntimeModeAlwaysOn {
+		s.writeError(w, http.StatusConflict, "global live updates are disabled in serverless runtime mode")
+		return
+	}
+	serveRunEventsSSE(w, r, s.runEvents)
+}
+
+func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.scheduler == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "scheduler not configured")
+		return
+	}
+	result, err := s.scheduler.TriggerDue(r.Context())
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) runIDFromRequest(r *http.Request) (string, error) {
