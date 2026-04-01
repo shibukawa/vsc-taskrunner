@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"golang.org/x/sys/unix"
 )
 
 type LocalIndexStore struct {
@@ -32,24 +30,16 @@ func (s *LocalIndexStore) UpdateIndex(ctx context.Context, fn func(*RunHistoryIn
 	if err := os.MkdirAll(filepath.Dir(s.lockPath), 0o755); err != nil {
 		return fmt.Errorf("create history index lock dir: %w", err)
 	}
-	lockFile, err := os.OpenFile(s.lockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return fmt.Errorf("open history index lock: %w", err)
-	}
-	defer lockFile.Close()
-	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX); err != nil {
-		return fmt.Errorf("lock history index: %w", err)
-	}
-	defer unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
-
-	index, err := s.readIndex()
-	if err != nil {
-		return err
-	}
-	if err := fn(index); err != nil {
-		return err
-	}
-	return s.writeIndex(index)
+	return withExclusiveFileLock(s.lockPath, "open history index lock", "lock history index", func() error {
+		index, err := s.readIndex()
+		if err != nil {
+			return err
+		}
+		if err := fn(index); err != nil {
+			return err
+		}
+		return s.writeIndex(index)
+	})
 }
 
 func (s *LocalIndexStore) readIndex() (*RunHistoryIndex, error) {
