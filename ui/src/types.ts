@@ -102,6 +102,7 @@ export type RunMeta = {
   tasks?: TaskRun[]
   hasArtifacts?: boolean
   artifacts?: ArtifactRef[]
+  worktreeKept?: boolean
 }
 
 export type RunStartResponse = {

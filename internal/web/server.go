@@ -185,6 +185,8 @@ func (s *Server) registerRunRoutes(wrap func(http.HandlerFunc) http.HandlerFunc)
 	s.mux.HandleFunc("GET /api/runs/{runId}/artifacts/{path...}", wrap(s.handleRunArtifactFile))
 	s.mux.HandleFunc("GET /api/runs/{runId}/worktree", wrap(s.handleRunWorktreeList))
 	s.mux.HandleFunc("GET /api/runs/{runId}/worktree/{path...}", wrap(s.handleRunWorktreeFile))
+	s.mux.HandleFunc("GET /api/runs/{runId}/worktree.zip", wrap(s.handleRunWorktreeZip))
+	s.mux.HandleFunc("GET /api/runs/{runId}/worktree/presign", wrap(s.handleRunWorktreePresign))
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, value interface{}) {
@@ -794,6 +796,54 @@ func (s *Server) handleRunWorktreeFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentTypeFor(filePath))
 	_, _ = w.Write(data)
+}
+
+func (s *Server) handleRunWorktreeZip(w http.ResponseWriter, r *http.Request) {
+	runID, err := s.runIDFromRequest(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	meta, err := s.manager.history.ReadMeta(runID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if !meta.WorktreeKept {
+		s.writeError(w, http.StatusNotFound, "worktree not present")
+		return
+	}
+	data, err := s.manager.history.ReadWorktreeZip(runID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=worktree-%s.zip", runID))
+	_, _ = w.Write(data)
+}
+
+func (s *Server) handleRunWorktreePresign(w http.ResponseWriter, r *http.Request) {
+	runID, err := s.runIDFromRequest(r)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	meta, err := s.manager.history.ReadMeta(runID)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if !meta.WorktreeKept {
+		s.writeError(w, http.StatusNotFound, "worktree not present")
+		return
+	}
+	url, err := s.manager.history.PresignWorktreeURL(runID, 5*time.Minute)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
 func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {

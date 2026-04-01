@@ -23,22 +23,19 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     environment:
-      RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
-      # Local-only single drive layout. Redundancy and availability are intentionally disabled.
       RUSTFS_VOLUMES: /data/rustfs0
     volumes:
-      - rustfs-data:/data
+      - rustfs-single-data:/data
       - rustfs-logs:/logs
     ports:
       - "9000:9000"
       - "9001:9001"
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -sS http://localhost:9000/ >/dev/null"]
-      interval: 5s
+      interval: 1s
       timeout: 5s
       retries: 20
 
@@ -72,6 +69,9 @@ services:
       - /app/config/runtask-ui.object.yaml
     working_dir: /app
     environment:
+      # When using local rustfs in docker-compose, set the public endpoint
+      # used in presigned URLs. Example: http://localhost:9000
+      RUNTASK_RUSTFS_OBJECT_PUBLIC_ENDPOINT: "http://localhost:9000"
       RUNTASK_EPHEMERAL_EMULATION_IDLE: 1m
     ports:
       - "8080:8080"
@@ -88,5 +88,5 @@ services:
 
 volumes:
   runtask-repos:
-  rustfs-data:
+  rustfs-single-data:
   rustfs-logs:

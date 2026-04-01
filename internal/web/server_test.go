@@ -1,6 +1,7 @@
 package web
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -754,6 +755,172 @@ func TestHandleRunArtifacts(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, items[0].CreatedAt); err != nil {
 		t.Fatalf("createdAt parse error: %v", err)
+	}
+}
+
+// fakeRunStore wraps a LocalRunStore and overrides PresignWorktreeURL for testing.
+type fakeRunStore struct {
+	inner      *LocalRunStore
+	presignURL string
+}
+
+func (f *fakeRunStore) RunDir(runID string) string  { return f.inner.RunDir(runID) }
+func (f *fakeRunStore) LogPath(runID string) string { return f.inner.LogPath(runID) }
+func (f *fakeRunStore) TaskLogPath(runID, taskLabel string) string {
+	return f.inner.TaskLogPath(runID, taskLabel)
+}
+func (f *fakeRunStore) WorktreePath(runID string) string { return f.inner.WorktreePath(runID) }
+func (f *fakeRunStore) ArtifactDir(runID string) string  { return f.inner.ArtifactDir(runID) }
+func (f *fakeRunStore) MetaPath(runID string) string     { return f.inner.MetaPath(runID) }
+func (f *fakeRunStore) WriteMeta(meta *RunMeta) error    { return f.inner.WriteMeta(meta) }
+func (f *fakeRunStore) ListMetas(ctx context.Context) ([]*RunMeta, error) {
+	return f.inner.ListMetas(ctx)
+}
+func (f *fakeRunStore) ReadMeta(runID string) (*RunMeta, error) { return f.inner.ReadMeta(runID) }
+func (f *fakeRunStore) ReadLog(runID string) ([]byte, error)    { return f.inner.ReadLog(runID) }
+func (f *fakeRunStore) ReadTaskLog(runID, taskLabel string) ([]byte, error) {
+	return f.inner.ReadTaskLog(runID, taskLabel)
+}
+func (f *fakeRunStore) TailLog(runID string, byteOffset int64) ([]byte, error) {
+	return f.inner.TailLog(runID, byteOffset)
+}
+func (f *fakeRunStore) ListWorktreeFiles(runID string) ([]string, error) {
+	return f.inner.ListWorktreeFiles(runID)
+}
+func (f *fakeRunStore) ReadWorktreeFile(runID, filePath string) ([]byte, error) {
+	return f.inner.ReadWorktreeFile(runID, filePath)
+}
+func (f *fakeRunStore) ListArtifactFiles(runID string) ([]string, error) {
+	return f.inner.ListArtifactFiles(runID)
+}
+func (f *fakeRunStore) StatArtifactFile(runID, filePath string) (ArtifactFileInfo, error) {
+	return f.inner.StatArtifactFile(runID, filePath)
+}
+func (f *fakeRunStore) ReadArtifactFile(runID, filePath string) ([]byte, error) {
+	return f.inner.ReadArtifactFile(runID, filePath)
+}
+func (f *fakeRunStore) ReadWorktreeZip(runID string) ([]byte, error) {
+	return f.inner.ReadWorktreeZip(runID)
+}
+func (f *fakeRunStore) PresignWorktreeURL(runID string, expiry time.Duration) (string, error) {
+	if f.presignURL == "" {
+		return "", fmt.Errorf("not supported")
+	}
+	return f.presignURL, nil
+}
+func (f *fakeRunStore) DeleteRun(runID string) error   { return f.inner.DeleteRun(runID) }
+func (f *fakeRunStore) FinalizeRun(runID string) error { return f.inner.FinalizeRun(runID) }
+
+func TestHandleRunWorktreeZip_Local(t *testing.T) {
+	t.Parallel()
+
+	historyDir := t.TempDir()
+	history, err := NewHistoryStore(historyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runID := "local-run-zip"
+	meta := &RunMeta{
+		RunID:        runID,
+		RunKey:       runID,
+		Branch:       "main",
+		TaskLabel:    "build",
+		RunNumber:    1,
+		Status:       RunStatusSuccess,
+		WorktreeKept: true,
+	}
+	if err := history.WriteMeta(meta); err != nil {
+		t.Fatal(err)
+	}
+	// create a worktree file
+	worktreeRoot := filepath.Join(history.WorktreePath(runID))
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "hello.txt"), []byte("world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewTaskManager(nil, uiconfig.DefaultConfig(), history)
+	server := NewServer(nil, uiconfig.DefaultConfig(), manager, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/"+runID+"/worktree.zip", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	// check zip header
+	data := rec.Body.Bytes()
+	if len(data) < 4 || !bytes.Equal(data[:4], []byte{'P', 'K', 0x03, 0x04}) {
+		t.Fatalf("response not a zip archive, len=%d", len(data))
+	}
+	// try to open zip
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range r.File {
+		if f.Name == "hello.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("zip did not contain hello.txt")
+	}
+}
+
+func TestHandleRunWorktreePresign_Fake(t *testing.T) {
+	t.Parallel()
+
+	historyDir := t.TempDir()
+	// create a real local run store and wrap
+	local := NewLocalRunStore(historyDir)
+	fake := &fakeRunStore{inner: local, presignURL: "https://example.com/download"}
+
+	// create history store with fake run store
+	indexStore := NewLocalIndexStore(historyDir)
+	history, err := NewHistoryStoreWithStores(historyDir, indexStore, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runID := "presign-run"
+	meta := &RunMeta{
+		RunID:        runID,
+		RunKey:       runID,
+		Branch:       "main",
+		TaskLabel:    "build",
+		RunNumber:    1,
+		Status:       RunStatusSuccess,
+		WorktreeKept: true,
+	}
+	if err := history.WriteMeta(meta); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewTaskManager(nil, uiconfig.DefaultConfig(), history)
+	server := NewServer(nil, uiconfig.DefaultConfig(), manager, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/"+runID+"/worktree/presign", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := body["url"]; got != "https://example.com/download" {
+		t.Fatalf("unexpected presign url %q", got)
 	}
 }
 

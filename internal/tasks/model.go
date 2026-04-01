@@ -30,10 +30,10 @@ type Task struct {
 	Option         string          `json:"option,omitempty"`
 	ProviderTask   string          `json:"task,omitempty"`
 	ProviderFile   string          `json:"file,omitempty"`
-	Command        TokenValue      `json:"command,omitempty"`
+	Command        TokenValue      `json:"command"`
 	Args           []TokenValue    `json:"args,omitempty"`
 	DependsOrder   string          `json:"dependsOrder,omitempty"`
-	Dependencies   DependencyList  `json:"dependsOn,omitempty"`
+	Dependencies   DependencyList  `json:"dependsOn"`
 	Group          json.RawMessage `json:"group,omitempty"`
 	Options        *Options        `json:"options,omitempty"`
 	Presentation   *Presentation   `json:"presentation,omitempty"`
@@ -142,10 +142,10 @@ func (t Task) EffectiveType() string {
 
 type TaskDefaults struct {
 	Type           string          `json:"type,omitempty"`
-	Command        TokenValue      `json:"command,omitempty"`
+	Command        TokenValue      `json:"command"`
 	Args           []TokenValue    `json:"args,omitempty"`
 	DependsOrder   string          `json:"dependsOrder,omitempty"`
-	Dependencies   DependencyList  `json:"dependsOn,omitempty"`
+	Dependencies   DependencyList  `json:"dependsOn"`
 	Group          json.RawMessage `json:"group,omitempty"`
 	Options        *Options        `json:"options,omitempty"`
 	Presentation   *Presentation   `json:"presentation,omitempty"`

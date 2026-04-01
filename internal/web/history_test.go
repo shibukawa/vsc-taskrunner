@@ -453,3 +453,9 @@ func (s *historyTestRunStore) ReadArtifactFile(runID, filePath string) ([]byte, 
 }
 func (s *historyTestRunStore) DeleteRun(runID string) error   { return nil }
 func (s *historyTestRunStore) FinalizeRun(runID string) error { return nil }
+func (s *historyTestRunStore) ReadWorktreeZip(runID string) ([]byte, error) {
+	return nil, os.ErrNotExist
+}
+func (s *historyTestRunStore) PresignWorktreeURL(runID string, expiry time.Duration) (string, error) {
+	return "", os.ErrNotExist
+}

@@ -3,6 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -155,9 +156,7 @@ func mergeOptions(base *Options, overlay *Options) *Options {
 		if result.Env == nil {
 			result.Env = make(map[string]string, len(overlay.Env))
 		}
-		for key, value := range overlay.Env {
-			result.Env[key] = value
-		}
+		maps.Copy(result.Env, overlay.Env)
 	}
 	if overlay.Shell != nil {
 		shellCopy := *overlay.Shell
@@ -252,8 +251,6 @@ func cloneMap(source map[string]string) map[string]string {
 		return nil
 	}
 	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
+	maps.Copy(result, source)
 	return result
 }

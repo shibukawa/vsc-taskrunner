@@ -29,6 +29,10 @@ type RunStore interface {
 	ListArtifactFiles(runID string) ([]string, error)
 	StatArtifactFile(runID, filePath string) (ArtifactFileInfo, error)
 	ReadArtifactFile(runID, filePath string) ([]byte, error)
+	// ReadWorktreeZip returns the worktree as a zip archive bytes.
+	ReadWorktreeZip(runID string) ([]byte, error)
+	// PresignWorktreeURL returns a presigned URL to download the worktree zip when supported.
+	PresignWorktreeURL(runID string, expiry time.Duration) (string, error)
 	DeleteRun(runID string) error
 	FinalizeRun(runID string) error
 }

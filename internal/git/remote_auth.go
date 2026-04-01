@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 
 	"vsc-taskrunner/internal/uiconfig"
@@ -198,8 +199,8 @@ func (a *remoteAuth) validateGitLab(ctx context.Context, token string) error {
 	var project struct {
 		PathWithNamespace string `json:"path_with_namespace"`
 		Permissions       struct {
-			ProjectAccess interface{} `json:"project_access"`
-			GroupAccess   interface{} `json:"group_access"`
+			ProjectAccess any `json:"project_access"`
+			GroupAccess   any `json:"group_access"`
 		} `json:"permissions"`
 	}
 	if err := a.getJSON(ctx, apiBaseURL+"/projects/"+projectPath, token, "", map[string]string{
@@ -287,7 +288,7 @@ func (a *remoteAuth) validateBitbucket(ctx context.Context, token string) error 
 	return nil
 }
 
-func (a *remoteAuth) getJSON(ctx context.Context, rawURL, token, authScheme string, headers map[string]string, dst interface{}) error {
+func (a *remoteAuth) getJSON(ctx context.Context, rawURL, token, authScheme string, headers map[string]string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
@@ -314,12 +315,7 @@ func (a *remoteAuth) getJSON(ctx context.Context, rawURL, token, authScheme stri
 }
 
 func stringSliceContains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, target)
 }
 
 func normalizeRemoteRepo(repo string) string {

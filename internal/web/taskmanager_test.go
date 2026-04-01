@@ -776,7 +776,7 @@ func TestCollectArtifactsZipResolvesTemplate(t *testing.T) {
 					Artifacts: []uiconfig.ArtifactRuleConfig{{
 						Path:         "dist",
 						Format:       "zip",
-						NameTemplate: "frontend-{branch}-{yyyymmdd}-{hhmmss}-{hash}-{longhash}.zip",
+						NameTemplate: "frontend-{branch}-b{buildno}-{yyyymmdd}-{hhmmss}-{hash}-{longhash}.zip",
 					}},
 				}},
 			),
@@ -788,6 +788,7 @@ func TestCollectArtifactsZipResolvesTemplate(t *testing.T) {
 		RunID:     "run-2",
 		Branch:    "feature/frontend",
 		TaskLabel: "build",
+		RunNumber: 17,
 		StartTime: time.Date(2026, time.March, 28, 9, 30, 0, 0, time.UTC),
 	}
 	fullHashOutput, err := exec.Command("git", "-C", worktree, "rev-parse", "HEAD").CombinedOutput()
@@ -802,7 +803,7 @@ func TestCollectArtifactsZipResolvesTemplate(t *testing.T) {
 	if len(refs) != 1 {
 		t.Fatalf("artifact refs = %d, want 1", len(refs))
 	}
-	wantPrefix := "frontend-feature-frontend-20260328-093000"
+	wantPrefix := "frontend-feature-frontend-b17-20260328-093000"
 	if !strings.HasPrefix(refs[0].Dest, wantPrefix) || !strings.HasSuffix(refs[0].Dest, ".zip") {
 		t.Fatalf("archive name = %q, want prefix %q and .zip suffix", refs[0].Dest, wantPrefix)
 	}

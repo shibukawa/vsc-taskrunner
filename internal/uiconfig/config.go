@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -95,7 +96,7 @@ type RepositoryAuthConfig struct {
 
 type AllowedTaskSpecs []AllowedTaskSpec
 
-func (s AllowedTaskSpecs) MarshalYAML() (interface{}, error) {
+func (s AllowedTaskSpecs) MarshalYAML() (any, error) {
 	node := &yaml.Node{Kind: yaml.MappingNode}
 	for _, spec := range s {
 		node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: spec.Pattern})
@@ -132,7 +133,7 @@ type UserAccessRule struct {
 
 type UserAccessRules []UserAccessRule
 
-func (r UserAccessRules) MarshalYAML() (interface{}, error) {
+func (r UserAccessRules) MarshalYAML() (any, error) {
 	if len(r) == 0 {
 		return nil, nil
 	}
@@ -654,23 +655,23 @@ func (c *UIConfig) UseSparseRunWorkspace(taskLabel string) bool {
 	return cfg.WorktreeDisabled
 }
 
-func (c *UIConfig) MatchUser(claims map[string]interface{}) bool {
+func (c *UIConfig) MatchUser(claims map[string]any) bool {
 	return c.matchUserRules(c.Auth.AllowUsers, claims, true)
 }
 
-func (c *UIConfig) IsAdminUser(claims map[string]interface{}) bool {
+func (c *UIConfig) IsAdminUser(claims map[string]any) bool {
 	return c.matchUserRules(c.Auth.AdminUsers, claims, false)
 }
 
-func (c *UIConfig) CanManageTokens(claims map[string]interface{}) bool {
+func (c *UIConfig) CanManageTokens(claims map[string]any) bool {
 	return c.IsAdminUser(claims)
 }
 
-func (c *UIConfig) CanRun(claims map[string]interface{}) bool {
+func (c *UIConfig) CanRun(claims map[string]any) bool {
 	return c.MatchUser(claims)
 }
 
-func (c *UIConfig) matchUserRules(rules []UserAccessRule, claims map[string]interface{}, allowWhenEmpty bool) bool {
+func (c *UIConfig) matchUserRules(rules []UserAccessRule, claims map[string]any, allowWhenEmpty bool) bool {
 	if len(rules) == 0 {
 		return allowWhenEmpty
 	}
@@ -684,7 +685,7 @@ func (c *UIConfig) matchUserRules(rules []UserAccessRule, claims map[string]inte
 			if matchGlob(rule.Value, value) {
 				return true
 			}
-		case []interface{}:
+		case []any:
 			for _, item := range value {
 				if matchGlob(rule.Value, fmt.Sprintf("%v", item)) {
 					return true
@@ -771,10 +772,5 @@ func repositoryIDFromRemoteURL(provider string, remoteURL *url.URL) (string, err
 }
 
 func stringInSlice(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, target)
 }
