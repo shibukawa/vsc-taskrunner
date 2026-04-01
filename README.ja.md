@@ -303,10 +303,10 @@ auth:
 
 シンプルな1台のサーバーでWebUIを常駐させる構成です。
 
-推奨起動コマンド:
+起動コマンド:
 
 ```sh
-runtask ui --runtime-mode=always-on
+runtask ui
 ```
 
 - `storage.backend: local` でローカルディスクに履歴や成果物を保存できます
@@ -314,17 +314,89 @@ runtask ui --runtime-mode=always-on
 - schedule は runtask プロセスがだいたい 1 分ごとに自動評価します
 - ブラウザはグローバル run stream で、他ユーザーの run サマリ更新をリアルタイムに受け取れます
 
+#### コンテナ構築
+
+WebUI は `.vscode/tasks.json` に書かれたコマンドをそのまま実行するため、最終イメージには対象プロジェクト向けの処理系と `git` が必要です。配布イメージ `ghcr.io/shibukawa/vsc-taskrunner:v1.0.0` はそのまま使うだけでなく、`runner` ステージとして `runtask` バイナリを取り出し、任意の runtime image に載せ替える使い方もできます。
+
+Node.js プロジェクト向けの例:
+
+```dockerfile
+FROM ghcr.io/shibukawa/vsc-taskrunner:v1.0.0 AS runner
+
+FROM node:24-trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=runner /usr/local/bin/runtask /usr/local/bin/runtask
+COPY runtask-ui.yaml /app/config/runtask-ui.yaml
+
+CMD ["runtask", "ui", "--config", "/app/config/runtask-ui.yaml"]
+```
+
+- `node` の部分は `python` や `golang` など、task 実行に必要な処理系イメージへ置き換えられます
+- `repository.cachePath` と `storage.historyDir` はコンテナ内の永続化パスに合わせて設定してください
+- ローカル保存を使う場合、run メタデータ、ログ、成果物、保存された worktree は `storage.historyDir` 配下に入るため、これを結果フォルダとして volume に切り出すのが扱いやすいです
+
+設定例:
+
+```yaml
+repository:
+  source: https://github.com/example/repo.git
+  cachePath: /var/lib/runtask/repos/repo-cache.git
+
+storage:
+  backend: local
+  historyDir: /var/lib/runtask/results/history
+```
+
+`docker compose` を使う場合は、設定ファイルと repository cache、結果フォルダを分離しておくと更新しやすくなります。リポジトリにある `compose.yaml` は開発用の例ですが、運用向けに独自イメージを使う場合は次のような構成が扱いやすいです。
+
+```yaml
+services:
+  runtask-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtask-ui
+    ports:
+      - "8080:8080"
+    command:
+      - runtask
+      - ui
+      - --config
+      - /app/config/runtask-ui.yaml
+    volumes:
+      - ./runtask-ui.yaml:/app/config/runtask-ui.yaml:ro
+      - runtask-repos:/var/lib/runtask/repos
+      - runtask-results:/var/lib/runtask/results
+
+volumes:
+  runtask-repos:
+  runtask-results:
+```
+
+- `runtask-repos` は bare repository cache 用の volume です
+- `runtask-results` は `storage.historyDir` を含む結果フォルダ用の volume です
+- 設定をイメージに同梱する場合は `./runtask-ui.yaml:/app/config/runtask-ui.yaml:ro` を外せます
+- `storage.historyDir: /var/lib/runtask/results/history` にしておくと、結果一式を `runtask-results` volume にまとめて保持できます
+
 #### サーバーレスモード
 
-Google Cloud Run functions、AWS Lambda、AWS ECSなどを使い、アクセスがあった時のみサーバーリソースを使うモードです。ビルド作業などはブロックストレージがあるため問題なくできますが、アクティブなインスタンスがなくなるとブロックストレージもリセットされてしまうため、`.git`のクローンや、外部パッケージのキャッシュなどがなくなる可能性があります。巨大プロジェクトなどでは常駐モードを使うか、AWS EFSやGoogle Cloud Firestoreなどをマウントして作業フォルダとしてください。
+Google Cloud Run functions、AWS Lambda、AWS ECSなどを使い、アクセスがあった時のみサーバーリソースを使うモードです。起動時には `--runtime-mode=serverless` を付けます。ビルド作業自体はできますが、アクティブなインスタンスがなくなるとローカルストレージが失われる環境では、`.git` の clone cache や外部パッケージのキャッシュも消える可能性があります。
 
-推奨起動コマンド:
+> [!NOTE]
+> 常駐モードでは他のユーザーの実行結果やスケジュール実行の実行結果のリアルタイム閲覧はできません。ポーリングでの更新となります。
+
+起動コマンド:
 
 ```sh
 runtask ui --runtime-mode=serverless
 ```
 
-サーバーレスモードでは実行結果、成果物、ワークの保存先としてS3互換のオブジェクトストレージを使います。
+サーバーレスモードでNFSなどのブロックストレージがない場合は、実行結果、成果物、保存された worktree の保存先として `storage.backend: object` を設定し、S3互換のオブジェクトストレージを使います。
 
 ```yaml
 storage:
@@ -335,6 +407,16 @@ storage:
     region: ap-northeast-1
 ```
 
+`storage.object` には `endpoint`、`bucket`、`region`、必要に応じて認証情報や prefix を設定します。remote repository を使う場合は `repository.cachePath` も必要です。
+
+```yaml
+repository:
+  source: https://github.com/example/repo.git
+  cachePath: /mnt/shared-cache/repos/repo-cache.git
+```
+
+インスタンスの再作成で clone cache や package cache が失われると毎回の実行が重くなるため、必要に応じて `repository.cachePath` の配置先や、`npm` / `pip` / `go` など各言語処理系のキャッシュディレクトリを AWS EFS などの NFS 共有ボリュームにマウントしてください。共有キャッシュは必須ではありませんが、依存が大きいプロジェクトでは有効です。
+
 サーバーレス環境で定期実行したい場合は、Cloud Scheduler、EventBridge、cron、GitHub Actions などの外部スケジューラから heartbeat endpoint を呼び出します。
 
 ```sh
@@ -342,8 +424,6 @@ curl -fsS https://runtask.example.com/api/heartbeat
 ```
 
 heartbeat はその時点で due な schedule だけを評価して起動します。
-
-このモードではグローバル live run stream は使わず、共有履歴は `/api/runs` の条件付きポーリングで更新されます。
 
 ## ライセンス
 
