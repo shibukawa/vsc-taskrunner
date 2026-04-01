@@ -387,6 +387,13 @@
             "$ref": "#/$defs/preRunTaskConfig"
           }
         },
+        "schedules": {
+          "type": "array",
+          "description": "Scheduled executions for this task pattern. Each schedule picks a target branch and fixed input values.",
+          "items": {
+            "$ref": "#/$defs/taskScheduleConfig"
+          }
+        },
         "historyKeepCount": {
           "type": "integer",
           "minimum": 1,
@@ -418,6 +425,33 @@
         }
       }
     },
+    "taskScheduleConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cron",
+        "branch"
+      ],
+      "properties": {
+        "cron": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cron expression in standard 5-field format, evaluated in the server's local time zone."
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Branch name to run against. It must also be allowed by the top-level branches configuration."
+        },
+        "inputValues": {
+          "type": "object",
+          "description": "Fixed task input values passed when this schedule starts a run.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "artifactRuleConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -432,8 +466,7 @@
         },
         "nameTemplate": {
           "type": "string",
-          "default": "artifacts.zip",
-          "description": "Archive name template used only when format=zip. Supports placeholders such as {buildno}, {branch}, {hash}, and UTC timestamp variants."
+          "description": "Archive name template used only when format=zip. If omitted, zip artifacts default to artifacts.zip. Supports placeholders such as {buildno}, {branch}, {hash}, {input:NAME}, and UTC timestamp variants."
         },
         "format": {
           "type": "string",

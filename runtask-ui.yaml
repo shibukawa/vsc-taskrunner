@@ -84,6 +84,13 @@ tasks:
   no-checkout-demo:
     worktree:
       disabled: true
+  scheduled-log:
+    schedules:
+      - cron: "*/10 * * * *"
+        branch: main
+    artifacts:
+      - path: dist/scheduled-run.txt
+        format: file
   demo-parallel: {}
   demo-sequence: {}
   demo-mixed: {}

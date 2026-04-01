@@ -22,6 +22,20 @@ const (
 	RunStatusFailed  RunStatus = "failed"
 )
 
+type RunTrigger string
+
+const (
+	RunTriggerManual    RunTrigger = "manual"
+	RunTriggerScheduled RunTrigger = "scheduled"
+)
+
+func normalizeRunTrigger(trigger RunTrigger) RunTrigger {
+	if trigger == RunTriggerScheduled {
+		return RunTriggerScheduled
+	}
+	return RunTriggerManual
+}
+
 type RunRef struct {
 	Branch    string
 	TaskLabel string
@@ -48,6 +62,7 @@ type RunMeta struct {
 	Artifacts    []ArtifactRef     `yaml:"artifacts" json:"artifacts,omitempty"`
 	User         string            `yaml:"user,omitempty" json:"user,omitempty"`
 	TokenLabel   string            `yaml:"tokenLabel,omitempty" json:"tokenLabel,omitempty"`
+	Trigger      RunTrigger        `yaml:"trigger,omitempty" json:"trigger"`
 	InputValues  map[string]string `yaml:"-" json:"-"`
 	Tasks        []*TaskRunMeta    `yaml:"tasks,omitempty" json:"tasks,omitempty"`
 }
@@ -69,6 +84,10 @@ func (m *RunMeta) ensureRunKey() {
 	default:
 		m.RunKey = m.Ref().Key()
 	}
+}
+
+func (m *RunMeta) ensureTrigger() {
+	m.Trigger = normalizeRunTrigger(m.Trigger)
 }
 
 type ArtifactRef struct {
@@ -133,13 +152,17 @@ func (s *HistoryStore) AllocateRun(branch, taskLabel string) (*RunMeta, error) {
 }
 
 func (s *HistoryStore) AllocateRunWithUser(branch, taskLabel, user, tokenLabel string) (*RunMeta, error) {
+	return s.AllocateRunWithTrigger(branch, taskLabel, user, tokenLabel, RunTriggerManual)
+}
+
+func (s *HistoryStore) AllocateRunWithTrigger(branch, taskLabel, user, tokenLabel string, trigger RunTrigger) (*RunMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var meta *RunMeta
 	if err := s.index.UpdateIndex(context.Background(), func(index *RunHistoryIndex) error {
 		runID := uuid.NewString()
-		summary := index.startRun(branch, taskLabel, user, tokenLabel, runID)
+		summary := index.startRun(branch, taskLabel, user, tokenLabel, normalizeRunTrigger(trigger), runID)
 		meta = &RunMeta{
 			RunID:      runID,
 			RunKey:     runID,
@@ -150,6 +173,7 @@ func (s *HistoryStore) AllocateRunWithUser(branch, taskLabel, user, tokenLabel s
 			StartTime:  summary.StartTime,
 			User:       user,
 			TokenLabel: tokenLabel,
+			Trigger:    summary.Trigger,
 		}
 		return nil
 	}); err != nil {
@@ -184,6 +208,7 @@ func (s *HistoryStore) MetaPath(runID string) string {
 
 func (s *HistoryStore) WriteMeta(meta *RunMeta) error {
 	meta.ensureRunKey()
+	meta.ensureTrigger()
 	if err := s.runs.WriteMeta(meta); err != nil {
 		return err
 	}
@@ -195,6 +220,7 @@ func (s *HistoryStore) ReadMeta(runID string) (*RunMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	meta.ensureTrigger()
 	meta.HasArtifacts = len(meta.Artifacts) > 0
 	return meta, nil
 }
@@ -264,6 +290,7 @@ func (s *HistoryStore) ReadArtifactFile(runID, filePath string) ([]byte, error) 
 }
 
 func (s *HistoryStore) RecordRunCompletion(meta *RunMeta, keepCount int) error {
+	meta.ensureTrigger()
 	var evicted []string
 	if err := s.index.UpdateIndex(context.Background(), func(index *RunHistoryIndex) error {
 		evicted = index.updateRun(meta, keepCount)
@@ -281,6 +308,7 @@ func (s *HistoryStore) RecordRunCompletion(meta *RunMeta, keepCount int) error {
 }
 
 func (s *HistoryStore) PersistCompletedRun(meta *RunMeta, keepCount int, keepSuccess int, keepFailure int) error {
+	meta.ensureTrigger()
 	var evicted []string
 	if err := s.index.UpdateIndex(context.Background(), func(index *RunHistoryIndex) error {
 		evicted = index.updateRun(meta, keepCount)

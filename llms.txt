@@ -3,6 +3,8 @@
 This guide is only for `runtask-ui.yaml`, the configuration file for `runtask ui`.
 It does not cover `.vscode/tasks.json`; that remains standard VS Code task configuration.
 
+Important: `--runtime-mode=always-on|serverless` is a `runtask ui` startup flag, not a YAML field in `runtask-ui.yaml`.
+
 ## UI command limits
 
 `runtask ui init`, `runtask ui edit task`, and `runtask ui edit branch` intentionally cover only basic setup:
@@ -14,7 +16,12 @@ It does not cover `.vscode/tasks.json`; that remains standard VS Code task confi
 - basic auth mode
 - basic storage mode
 
-If the user needs advanced auth rules, token storage, object storage tuning, logging redaction, pre-run commands, or sparse/full worktree control, edit `runtask-ui.yaml` directly instead of trying to force those settings through the interactive UI commands.
+If the user needs advanced auth rules, token storage, object storage tuning, logging redaction, pre-run commands, schedules, heartbeat-driven serverless execution, or sparse/full worktree control, edit `runtask-ui.yaml` directly instead of trying to force those settings through the interactive UI commands.
+
+If the user asks about shared-history live updates or serverless vs always-on browser behavior, also tell them to adjust the `runtask ui` startup flag:
+
+- `runtask ui --runtime-mode=always-on`
+- `runtask ui --runtime-mode=serverless`
 
 ## Required schema comment
 
@@ -97,6 +104,7 @@ Each task config may contain:
 
 - `artifacts`
 - `preRunTask`
+- `schedules`
 - `worktree.disabled`
 - `worktree.keepOnSuccess`
 - `worktree.keepOnFailure`
@@ -105,13 +113,14 @@ Each task config may contain:
 
 - `path`: required path or glob to collect
 - `format`: `zip` or `file`, default `zip`
-- `nameTemplate`: archive filename template, default `artifacts.zip`
+- `nameTemplate`: archive filename template for `format: zip`; default `artifacts.zip`
 
 Notes:
 
 - `format: zip` creates one archive per rule
-- `format: file` keeps matching files individually
+- `format: file` keeps matching files individually using each matched relative path as the output name
 - duplicate matches across rules are allowed
+- `nameTemplate` also supports `{input:NAME}` placeholders using sanitized task input values
 
 ### `tasks.<pattern>.preRunTask[]`
 
@@ -128,6 +137,26 @@ Behavior:
 - they are written into the combined log
 - they are not stored as child tasks
 - if a pre-run command fails, the parent task does not start
+
+### `tasks.<pattern>.schedules[]`
+
+- `cron`: required standard 5-field cron expression
+- `branch`: required branch name for the scheduled run
+- `inputValues`: optional fixed string map for task inputs
+
+Behavior:
+
+- schedule branches must also pass the top-level `branches` allowlist
+- cron is evaluated in the server's local time zone
+- in always-on mode, runtask evaluates schedules automatically in the background
+- in serverless mode, schedules advance only when `/api/heartbeat` is called
+- late heartbeat calls collapse multiple missed slots into one run for the latest due slot
+
+Runtime-mode notes outside YAML:
+
+- `runtask ui --runtime-mode=always-on` enables the global `/api/runs/stream` SSE endpoint for immediate shared-history updates
+- `runtask ui --runtime-mode=serverless` disables the global run stream; browsers rely on conditional polling of `GET /api/runs`
+- default runtime mode is `always-on`
 
 ### `tasks.<pattern>.worktree.disabled`
 
@@ -180,6 +209,7 @@ When generating YAML:
 - Keep `tasks` entries in priority order because first match wins.
 - Do not assume `preRunTask` becomes a visible child task.
 - Do not assume `worktree.disabled: true` means “disabled task”; it means sparse workspace execution.
+- Do not treat `/api/heartbeat` as a generic remote-run API; it only evaluates schedules already defined in YAML.
 - For remote repositories, remember that Go validation may still require `cachePath` even if the schema cannot fully express that cross-field rule.
 - For `auth.apiTokens.enabled: true`, remember Go validation also requires `auth.noAuth=false`.
 
@@ -247,6 +277,37 @@ tasks:
         args:
           - ci
         cwd: ${workspaceFolder}
+```
+
+### Scheduled build in serverless mode
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shibukawa/vsc-taskrunner/main/config-schema.json
+repository:
+  source: https://github.com/acme/demo.git
+  cachePath: /var/lib/runtask/demo-cache.git
+auth:
+  noAuth: true
+branches:
+  - main
+tasks:
+  build:
+    schedules:
+      - cron: "0 6 * * 1-5"
+        branch: main
+        inputValues:
+          env: staging
+storage:
+  backend: object
+  object:
+    endpoint: https://s3.example.com
+    bucket: runtask
+```
+
+Trigger from an external scheduler with:
+
+```sh
+curl -fsS https://runtask.example.com/api/heartbeat
 ```
 
 ## Related files

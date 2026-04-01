@@ -146,6 +146,71 @@ func TestTaskConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestTaskConfigFileArtifactsDoNotApplyZipNameTemplateDefault(t *testing.T) {
+	cfg := &UIConfig{Tasks: testTasks(
+		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{Artifacts: []ArtifactRuleConfig{{Path: "dist/*", Format: "file"}}}},
+	)}
+	taskCfg, ok := cfg.TaskConfig("build")
+	if !ok {
+		t.Fatal("expected task config")
+	}
+	if taskCfg.Artifacts[0].Format != "file" {
+		t.Fatalf("artifacts[0].format = %q, want file", taskCfg.Artifacts[0].Format)
+	}
+	if taskCfg.Artifacts[0].NameTemplate != "" {
+		t.Fatalf("artifacts[0].nameTemplate = %q, want empty", taskCfg.Artifacts[0].NameTemplate)
+	}
+}
+
+func TestTaskSchedulesUnmarshalAndLookup(t *testing.T) {
+	var cfg UIConfig
+	data := []byte(`
+repository:
+  source: /tmp/repo
+branches:
+  - main
+tasks:
+  build:
+    schedules:
+      - cron: "*/5 * * * *"
+        branch: main
+        inputValues:
+          env: prod
+`)
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() unexpected error: %v", err)
+	}
+	schedules := cfg.MatchingSchedules("build")
+	if len(schedules) != 1 {
+		t.Fatalf("MatchingSchedules() len = %d, want 1", len(schedules))
+	}
+	if schedules[0].Cron != "*/5 * * * *" || schedules[0].Branch != "main" {
+		t.Fatalf("unexpected schedule: %+v", schedules[0])
+	}
+	if got := schedules[0].InputValues["env"]; got != "prod" {
+		t.Fatalf("inputValues[env] = %q, want prod", got)
+	}
+	branches := cfg.ScheduledBranches()
+	if got := strings.Join(branches, ","); got != "main" {
+		t.Fatalf("ScheduledBranches() = %q, want main", got)
+	}
+}
+
+func TestValidateRejectsScheduleBranchOutsideAllowedBranches(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Repository.Source = "/tmp/local-repo"
+	cfg.Branches = []string{"main"}
+	cfg.Tasks = testTasks(
+		AllowedTaskSpec{Pattern: "build", Config: TaskUIConfig{Schedules: []TaskScheduleConfig{{
+			Cron:   "0 * * * *",
+			Branch: "release/1.0",
+		}}}},
+	)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid scheduled branch to fail validation")
+	}
+}
+
 func TestMatchUser(t *testing.T) {
 	cfg := &UIConfig{Auth: AuthConfig{AllowUsers: []UserAccessRule{{Claim: "email", Value: "*@example.com"}, {Claim: "groups", Value: "admin"}}}}
 	if !cfg.MatchUser(map[string]any{"email": "alice@example.com"}) {

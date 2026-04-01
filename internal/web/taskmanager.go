@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,8 @@ type sseMessage struct {
 }
 
 const workspacePrepareTaskLabel = "prepare workspace"
+
+var artifactInputPlaceholderPattern = regexp.MustCompile(`\{input:([^}]+)\}`)
 
 // subscribe registers a channel to receive log chunks in real time.
 // The channel is automatically removed when the run ends.
@@ -167,6 +170,9 @@ type TaskManager struct {
 
 	mu         sync.RWMutex
 	activeRuns map[string]*ActiveRun
+
+	eventMu          sync.RWMutex
+	runEventListener func(runEventType, *RunMeta)
 }
 
 // NewTaskManager creates a TaskManager.
@@ -207,6 +213,27 @@ func (tm *TaskManager) hasActiveRuns() bool {
 	return len(tm.activeRuns) > 0
 }
 
+func (tm *TaskManager) SetRunEventListener(listener func(runEventType, *RunMeta)) {
+	if tm == nil {
+		return
+	}
+	tm.eventMu.Lock()
+	tm.runEventListener = listener
+	tm.eventMu.Unlock()
+}
+
+func (tm *TaskManager) emitRunEvent(eventType runEventType, meta *RunMeta) {
+	if tm == nil || meta == nil {
+		return
+	}
+	tm.eventMu.RLock()
+	listener := tm.runEventListener
+	tm.eventMu.RUnlock()
+	if listener != nil {
+		listener(eventType, runMetaSummary(meta))
+	}
+}
+
 // StartRun begins executing taskLabel from branch in the background.
 // It returns the new run metadata immediately; the run itself runs asynchronously.
 func (tm *TaskManager) StartRun(ctx context.Context, branch, taskLabel, user string) (*RunMeta, error) {
@@ -214,9 +241,19 @@ func (tm *TaskManager) StartRun(ctx context.Context, branch, taskLabel, user str
 }
 
 func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel, user, tokenLabel string, inputValues map[string]string) (*RunMeta, error) {
-	meta, err := tm.history.AllocateRunWithUser(branch, taskLabel, user, tokenLabel)
+	return tm.StartRunWithTriggerAndInputs(ctx, branch, taskLabel, user, tokenLabel, RunTriggerManual, inputValues)
+}
+
+func (tm *TaskManager) StartRunWithTriggerAndInputs(ctx context.Context, branch, taskLabel, user, tokenLabel string, trigger RunTrigger, inputValues map[string]string) (*RunMeta, error) {
+	meta, err := tm.history.AllocateRunWithTrigger(branch, taskLabel, user, tokenLabel, trigger)
 	if err != nil {
-		tm.logRunStartFailure(&RunMeta{Branch: branch, TaskLabel: taskLabel, User: user, TokenLabel: tokenLabel}, "allocate run", err)
+		tm.logRunStartFailure(&RunMeta{
+			Branch:     branch,
+			TaskLabel:  taskLabel,
+			User:       user,
+			TokenLabel: tokenLabel,
+			Trigger:    normalizeRunTrigger(trigger),
+		}, "allocate run", err)
 		return nil, fmt.Errorf("allocate run: %w", err)
 	}
 
@@ -231,6 +268,7 @@ func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel
 	meta.StartTime = time.Now().UTC()
 	meta.User = user
 	meta.TokenLabel = tokenLabel
+	meta.Trigger = normalizeRunTrigger(trigger)
 	meta.InputValues = cloneStringMap(inputValues)
 
 	active := &ActiveRun{
@@ -274,6 +312,7 @@ func (tm *TaskManager) StartRunWithInputs(ctx context.Context, branch, taskLabel
 	tm.mu.Unlock()
 
 	log.Printf("runtask run started run_id=%q branch=%q task=%q user=%q run_number=%d", meta.RunID, meta.Branch, meta.TaskLabel, meta.User, meta.RunNumber)
+	tm.emitRunEvent(runEventCreated, meta)
 
 	go tm.executeRun(context.Background(), active)
 
@@ -497,6 +536,7 @@ func (tm *TaskManager) doRun(ctx context.Context, active *ActiveRun) error {
 	}(); persistErr != nil {
 		fmt.Fprintf(bw, "=== runtask: warning: failed to persist run meta: %v ===\n", persistErr)
 	}
+	tm.emitRunEvent(runEventFinished, meta)
 
 	log.Printf("runtask run finished run_id=%q branch=%q task=%q user=%q status=%q exit_code=%d duration_ms=%d", meta.RunID, meta.Branch, meta.TaskLabel, meta.User, meta.Status, meta.ExitCode, meta.EndTime.Sub(meta.StartTime).Milliseconds())
 
@@ -719,6 +759,7 @@ func (tm *TaskManager) failRun(active *ActiveRun, cause error) {
 			fail,
 		)
 	}()
+	tm.emitRunEvent(runEventFinished, meta)
 	log.Printf("runtask run failed run_id=%q branch=%q task=%q user=%q status=%q error=%q duration_ms=%d", meta.RunID, meta.Branch, meta.TaskLabel, meta.User, meta.Status, cause.Error(), meta.EndTime.Sub(meta.StartTime).Milliseconds())
 	if active.logFile != nil {
 		_ = active.logFile.Close()
@@ -794,6 +835,9 @@ func (tm *TaskManager) handleTaskEvent(active *ActiveRun, event tasks.TaskEvent)
 	}
 	if raw, err := json.Marshal(payload); err == nil {
 		active.broadcast(string(event.Type), raw)
+	}
+	if event.Type != tasks.TaskEventLine {
+		tm.emitRunEvent(runEventUpdated, active.Meta)
 	}
 }
 
@@ -1155,6 +1199,7 @@ func collectArtifactFiles(artifactDir string, worktreePath string, matches []art
 }
 
 func (tm *TaskManager) collectArtifactZip(meta *RunMeta, artifactDir string, worktreePath string, matches []artifactMatch, rule uiconfig.ArtifactRuleConfig) ([]ArtifactRef, error) {
+	// nameTemplate is only meaningful for zip output. format=file keeps each matched path as-is.
 	archiveName := tm.resolveArtifactArchiveName(meta, worktreePath, rule)
 	archivePath := filepath.Join(artifactDir, archiveName)
 	file, err := os.Create(archivePath)
@@ -1202,6 +1247,7 @@ func (tm *TaskManager) resolveArtifactArchiveName(meta *RunMeta, worktreePath st
 	if strings.TrimSpace(template) == "" {
 		template = uiconfig.DefaultArtifactArchive
 	}
+	template = replaceArtifactInputPlaceholders(template, meta.InputValues)
 
 	fullHash := strings.TrimSpace(meta.CommitHash)
 	if fullHash == "" {
@@ -1230,6 +1276,21 @@ func (tm *TaskManager) resolveArtifactArchiveName(meta *RunMeta, worktreePath st
 		return uiconfig.DefaultArtifactArchive
 	}
 	return sanitizeArtifactArchiveName(name)
+}
+
+func replaceArtifactInputPlaceholders(template string, inputValues map[string]string) string {
+	return artifactInputPlaceholderPattern.ReplaceAllStringFunc(template, func(match string) string {
+		parts := artifactInputPlaceholderPattern.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+		key := strings.TrimSpace(parts[1])
+		if key == "" {
+			return "unknown"
+		}
+		value := inputValues[key]
+		return sanitizeArtifactFilenamePart(value)
+	})
 }
 
 func sanitizeArtifactFilenamePart(value string) string {

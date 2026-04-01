@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -117,9 +118,16 @@ type AllowedTaskSpec struct {
 type TaskUIConfig struct {
 	Artifacts   []ArtifactRuleConfig `yaml:"artifacts,omitempty"`
 	PreRunTasks []PreRunTaskConfig   `yaml:"preRunTask,omitempty"`
+	Schedules   []TaskScheduleConfig `yaml:"schedules,omitempty"`
 	// Per-task overrides. If nil/empty the global storage settings are used.
 	HistoryKeepCount *int                `yaml:"historyKeepCount,omitempty"`
 	Worktree         *TaskWorktreeConfig `yaml:"worktree,omitempty"`
+}
+
+type TaskScheduleConfig struct {
+	Cron        string            `yaml:"cron"`
+	Branch      string            `yaml:"branch"`
+	InputValues map[string]string `yaml:"inputValues,omitempty"`
 }
 
 type ArtifactRuleConfig struct {
@@ -440,6 +448,11 @@ func (c *UIConfig) Validate() error {
 		if err := validateTaskUIConfig(spec.Config, fmt.Sprintf("tasks[%q]", spec.Pattern)); err != nil {
 			return err
 		}
+		for scheduleIndex, schedule := range spec.Config.Schedules {
+			if !c.MatchBranch(schedule.Branch) {
+				return fmt.Errorf("tasks[%q].schedules[%d].branch %q is not allowed by branches configuration", spec.Pattern, scheduleIndex, schedule.Branch)
+			}
+		}
 	}
 	return nil
 }
@@ -489,6 +502,11 @@ func validateTaskUIConfig(cfg TaskUIConfig, prefix string) error {
 	}
 	for index, hook := range cfg.PreRunTasks {
 		if err := validatePreRunTaskConfig(hook, fmt.Sprintf("%s.preRunTask[%d]", prefix, index)); err != nil {
+			return err
+		}
+	}
+	for index, schedule := range cfg.Schedules {
+		if err := validateTaskScheduleConfig(schedule, fmt.Sprintf("%s.schedules[%d]", prefix, index)); err != nil {
 			return err
 		}
 	}
@@ -555,6 +573,26 @@ func validatePreRunTaskConfig(hook PreRunTaskConfig, prefix string) error {
 	}
 	if hook.Shell != nil && strings.TrimSpace(hook.Shell.Executable) == "" {
 		return fmt.Errorf("%s.shell.executable is required when shell is set", prefix)
+	}
+	return nil
+}
+
+func validateTaskScheduleConfig(schedule TaskScheduleConfig, prefix string) error {
+	schedule.Cron = strings.TrimSpace(schedule.Cron)
+	schedule.Branch = strings.TrimSpace(schedule.Branch)
+	if schedule.Cron == "" {
+		return fmt.Errorf("%s.cron is required", prefix)
+	}
+	if schedule.Branch == "" {
+		return fmt.Errorf("%s.branch is required", prefix)
+	}
+	if _, err := cron.ParseStandard(schedule.Cron); err != nil {
+		return fmt.Errorf("%s.cron is invalid: %w", prefix, err)
+	}
+	for key := range schedule.InputValues {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("%s.inputValues keys must not be empty", prefix)
+		}
 	}
 	return nil
 }
@@ -676,12 +714,29 @@ func (c *UIConfig) TaskConfig(taskLabel string) (*TaskUIConfig, bool) {
 					if artifact.Format == "" {
 						artifact.Format = "zip"
 					}
-					if artifact.NameTemplate == "" {
+					if artifact.Format == "zip" && artifact.NameTemplate == "" {
 						artifact.NameTemplate = DefaultArtifactArchive
 					}
 					artifacts[index] = artifact
 				}
 				cfg.Artifacts = artifacts
+			}
+			if len(cfg.Schedules) > 0 {
+				schedules := make([]TaskScheduleConfig, len(cfg.Schedules))
+				for index, schedule := range cfg.Schedules {
+					copied := TaskScheduleConfig{
+						Cron:   schedule.Cron,
+						Branch: schedule.Branch,
+					}
+					if len(schedule.InputValues) > 0 {
+						copied.InputValues = make(map[string]string, len(schedule.InputValues))
+						for key, value := range schedule.InputValues {
+							copied.InputValues[key] = value
+						}
+					}
+					schedules[index] = copied
+				}
+				cfg.Schedules = schedules
 			}
 			if cfg.Worktree != nil {
 				copied := *cfg.Worktree
@@ -699,6 +754,34 @@ func (c *UIConfig) MatchingPreRunTasks(taskLabel string) []PreRunTaskConfig {
 		return nil
 	}
 	return append([]PreRunTaskConfig(nil), cfg.PreRunTasks...)
+}
+
+func (c *UIConfig) MatchingSchedules(taskLabel string) []TaskScheduleConfig {
+	cfg, ok := c.TaskConfig(taskLabel)
+	if !ok || len(cfg.Schedules) == 0 {
+		return nil
+	}
+	return append([]TaskScheduleConfig(nil), cfg.Schedules...)
+}
+
+func (c *UIConfig) ScheduledBranches() []string {
+	seen := make(map[string]struct{})
+	branches := make([]string, 0)
+	for _, spec := range c.Tasks {
+		for _, schedule := range spec.Config.Schedules {
+			branch := strings.TrimSpace(schedule.Branch)
+			if branch == "" {
+				continue
+			}
+			if _, ok := seen[branch]; ok {
+				continue
+			}
+			seen[branch] = struct{}{}
+			branches = append(branches, branch)
+		}
+	}
+	slices.Sort(branches)
+	return branches
 }
 
 func (c *UIConfig) UseSparseRunWorkspace(taskLabel string) bool {

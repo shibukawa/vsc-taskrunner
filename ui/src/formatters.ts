@@ -65,6 +65,43 @@ export function formatRelativeTime(value?: string): string {
   return `${deltaYears} year${deltaYears === 1 ? '' : 's'} ago`
 }
 
+export function formatRelativeFutureTime(value?: string, now = Date.now()): string {
+  const date = parseDisplayDate(value)
+  if (!date) {
+    return 'N/A'
+  }
+  const deltaSeconds = Math.max(0, Math.floor((date.getTime() - now) / 1000))
+  if (deltaSeconds < 10) {
+    return 'due now'
+  }
+  if (deltaSeconds < 60) {
+    return `in ${deltaSeconds}s`
+  }
+
+  const deltaMinutes = Math.floor(deltaSeconds / 60)
+  if (deltaMinutes < 60) {
+    return `in ${deltaMinutes} min`
+  }
+
+  const deltaHours = Math.floor(deltaMinutes / 60)
+  if (deltaHours < 24) {
+    return `in ${deltaHours} hour${deltaHours === 1 ? '' : 's'}`
+  }
+
+  const deltaDays = Math.floor(deltaHours / 24)
+  if (deltaDays < 30) {
+    return `in ${deltaDays} day${deltaDays === 1 ? '' : 's'}`
+  }
+
+  const deltaMonths = Math.floor(deltaDays / 30)
+  if (deltaMonths < 12) {
+    return `in ${deltaMonths} month${deltaMonths === 1 ? '' : 's'}`
+  }
+
+  const deltaYears = Math.floor(deltaMonths / 12)
+  return `in ${deltaYears} year${deltaYears === 1 ? '' : 's'}`
+}
+
 export function formatDuration(start?: string, end?: string): string {
   if (!start) {
     return 'N/A'

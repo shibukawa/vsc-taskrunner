@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { ArtifactRule, Branch, BranchTask, PreRunTask, RunMeta } from '../types'
-import { formatDateTime, formatRelativeTime } from '../formatters'
+import type { ArtifactRule, Branch, BranchTask, PreRunTask, RunMeta, TaskSchedule } from '../types'
+import { formatDateTime, formatFullDateTime, formatRelativeFutureTime, formatRelativeTime } from '../formatters'
 
 const props = defineProps<{
   branches: Branch[]
@@ -42,12 +42,23 @@ type TaskPopoverState = {
   anchor: HTMLElement
 }
 
+type RunPopoverState = {
+  run: RunMeta
+  anchor: HTMLElement
+}
+
 const taskPopover = ref<TaskPopoverState | null>(null)
 const taskPopoverPosition = ref<BranchPopoverPosition>({ top: 0, left: 0 })
 const taskPopoverElement = ref<HTMLElement | null>(null)
+const runPopover = ref<RunPopoverState | null>(null)
+const runPopoverPosition = ref<BranchPopoverPosition>({ top: 0, left: 0 })
+const runPopoverElement = ref<HTMLElement | null>(null)
+const taskPopoverNow = ref(Date.now())
 
 let branchPopoverFrame: number | null = null
 let taskPopoverFrame: number | null = null
+let runPopoverFrame: number | null = null
+let taskPopoverTimer: number | null = null
 
 function statusEmoji(status?: RunMeta['status']): string {
   switch (status) {
@@ -75,7 +86,8 @@ function taskRowSubtitle(task: BranchTask): string {
   if (!lastRun) {
     return 'no exec'
   }
-  return formatRelativeTime(lastRun.startTime)
+  const time = formatRelativeTime(lastRun.startTime)
+  return lastRun.user ? `${time} by ${lastRun.user}` : time
 }
 
 function taskRowSubtitleTitle(task: BranchTask): string | undefined {
@@ -83,15 +95,28 @@ function taskRowSubtitleTitle(task: BranchTask): string | undefined {
   if (!lastRun) {
     return undefined
   }
-  return formatDateTime(lastRun.startTime)
+  const time = formatDateTime(lastRun.startTime)
+  return lastRun.user ? `${time} by ${lastRun.user}` : time
 }
 
 function taskHasArtifacts(task: BranchTask): boolean {
   return Boolean(latestRunForTask(task)?.hasArtifacts)
 }
 
+function runIsScheduled(run: RunMeta | null | undefined): boolean {
+  return run?.trigger === 'scheduled'
+}
+
 function runRowTitle(run: RunMeta): string {
   return `#${run.runNumber} ${run.taskLabel} (${run.branch})`
+}
+
+function runOwner(run: RunMeta): string | null {
+  return run.user?.trim() ? run.user : null
+}
+
+function runHasPopover(run: RunMeta): boolean {
+  return Boolean(runOwner(run))
 }
 
 function updateBranchPopoverPosition(): void {
@@ -160,6 +185,27 @@ function scheduleTaskPopoverPositionUpdate(): void {
   })
 }
 
+function updateRunPopoverPosition(): void {
+  if (typeof window === 'undefined' || !runPopover.value) {
+    return
+  }
+
+  runPopoverPosition.value = computePopoverPosition(runPopover.value.anchor, runPopoverElement.value, 280)
+}
+
+function scheduleRunPopoverPositionUpdate(): void {
+  if (typeof window === 'undefined' || !runPopover.value) {
+    return
+  }
+  if (runPopoverFrame !== null) {
+    window.cancelAnimationFrame(runPopoverFrame)
+  }
+  runPopoverFrame = window.requestAnimationFrame(() => {
+    runPopoverFrame = null
+    updateRunPopoverPosition()
+  })
+}
+
 function showBranchPopover(branch: Branch, event: MouseEvent | FocusEvent): void {
   const anchor = event.currentTarget
   if (!(anchor instanceof HTMLElement)) {
@@ -185,6 +231,24 @@ function showTaskPopover(task: BranchTask, event: MouseEvent | FocusEvent): void
 function hideTaskPopover(taskLabel: string): void {
   if (taskPopover.value?.task.label === taskLabel) {
     taskPopover.value = null
+  }
+}
+
+function showRunPopover(run: RunMeta, event: MouseEvent | FocusEvent): void {
+  if (!runHasPopover(run)) {
+    runPopover.value = null
+    return
+  }
+  const anchor = event.currentTarget
+  if (!(anchor instanceof HTMLElement)) {
+    return
+  }
+  runPopover.value = { run, anchor }
+}
+
+function hideRunPopover(runKey: string): void {
+  if (runPopover.value?.run.runKey === runKey) {
+    runPopover.value = null
   }
 }
 
@@ -221,6 +285,33 @@ function formatPreRunTask(task: PreRunTask): string {
   return parts.join(' / ')
 }
 
+function syncTaskPopoverTimer(): void {
+  const needsTimer = Boolean(taskPopover.value?.task.schedules?.length)
+  if (needsTimer && taskPopoverTimer === null && typeof window !== 'undefined') {
+    taskPopoverNow.value = Date.now()
+    taskPopoverTimer = window.setInterval(() => {
+      taskPopoverNow.value = Date.now()
+    }, 30000)
+    return
+  }
+  if (!needsTimer && taskPopoverTimer !== null) {
+    window.clearInterval(taskPopoverTimer)
+    taskPopoverTimer = null
+  }
+}
+
+function scheduleNextRunText(schedule: TaskSchedule): string {
+  return formatDateTime(schedule.nextRunAt)
+}
+
+function scheduleNextRunTitle(schedule: TaskSchedule): string {
+  return formatFullDateTime(schedule.nextRunAt)
+}
+
+function scheduleTimeUntilText(schedule: TaskSchedule): string {
+  return formatRelativeFutureTime(schedule.nextRunAt, taskPopoverNow.value)
+}
+
 watch(branchPopover, async (value) => {
   if (typeof window === 'undefined') {
     return
@@ -246,13 +337,32 @@ watch(taskPopover, async (value) => {
   if (value) {
     await nextTick()
     updateTaskPopoverPosition()
+    syncTaskPopoverTimer()
     window.addEventListener('resize', scheduleTaskPopoverPositionUpdate)
     window.addEventListener('scroll', scheduleTaskPopoverPositionUpdate, true)
     return
   }
 
+  syncTaskPopoverTimer()
   window.removeEventListener('resize', scheduleTaskPopoverPositionUpdate)
   window.removeEventListener('scroll', scheduleTaskPopoverPositionUpdate, true)
+})
+
+watch(runPopover, async (value) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  if (value) {
+    await nextTick()
+    updateRunPopoverPosition()
+    window.addEventListener('resize', scheduleRunPopoverPositionUpdate)
+    window.addEventListener('scroll', scheduleRunPopoverPositionUpdate, true)
+    return
+  }
+
+  window.removeEventListener('resize', scheduleRunPopoverPositionUpdate)
+  window.removeEventListener('scroll', scheduleRunPopoverPositionUpdate, true)
 })
 
 watch(branchPopoverElement, () => {
@@ -264,6 +374,12 @@ watch(branchPopoverElement, () => {
 watch(taskPopoverElement, () => {
   if (taskPopover.value) {
     scheduleTaskPopoverPositionUpdate()
+  }
+})
+
+watch(runPopoverElement, () => {
+  if (runPopover.value) {
+    scheduleRunPopoverPositionUpdate()
   }
 })
 
@@ -307,17 +423,45 @@ watch(
   { deep: true },
 )
 
+watch(
+  () => props.filteredRuns,
+  (runs) => {
+    if (!runPopover.value) {
+      return
+    }
+    const current = runs.find((run) => run.runKey === runPopover.value?.run.runKey)
+    if (!current || !runHasPopover(current)) {
+      runPopover.value = null
+      return
+    }
+    runPopover.value = {
+      ...runPopover.value,
+      run: current,
+    }
+    scheduleRunPopoverPositionUpdate()
+  },
+  { deep: true },
+)
+
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', scheduleBranchPopoverPositionUpdate)
     window.removeEventListener('scroll', scheduleBranchPopoverPositionUpdate, true)
     window.removeEventListener('resize', scheduleTaskPopoverPositionUpdate)
     window.removeEventListener('scroll', scheduleTaskPopoverPositionUpdate, true)
+    window.removeEventListener('resize', scheduleRunPopoverPositionUpdate)
+    window.removeEventListener('scroll', scheduleRunPopoverPositionUpdate, true)
     if (branchPopoverFrame !== null) {
       window.cancelAnimationFrame(branchPopoverFrame)
     }
     if (taskPopoverFrame !== null) {
       window.cancelAnimationFrame(taskPopoverFrame)
+    }
+    if (runPopoverFrame !== null) {
+      window.cancelAnimationFrame(runPopoverFrame)
+    }
+    if (taskPopoverTimer !== null) {
+      window.clearInterval(taskPopoverTimer)
     }
   }
 })
@@ -419,13 +563,19 @@ onBeforeUnmount(() => {
             :class="['list-row', 'run-row', { active: run.runKey === currentRunKey }]"
             role="option"
             :aria-selected="run.runKey === currentRunKey"
+            :aria-describedby="runPopover?.run.runKey === run.runKey ? 'run-popover-tooltip' : undefined"
             @click="emit('select-run', run)"
+            @mouseenter="showRunPopover(run, $event)"
+            @mouseleave="hideRunPopover(run.runKey)"
+            @focus="showRunPopover(run, $event)"
+            @blur="hideRunPopover(run.runKey)"
           >
             <span class="row-status" aria-hidden="true">{{ statusEmoji(run.status) }}</span>
             <span class="row-copy">
               <strong class="row-title">{{ runRowTitle(run) }}</strong>
               <span class="row-subline">
                 <span class="row-time" :title="formatDateTime(run.startTime)">{{ formatRelativeTime(run.startTime) }}</span>
+                <span v-if="runIsScheduled(run)" class="schedule-marker" aria-label="scheduled run">⏱️</span>
                 <span v-if="run.hasArtifacts" class="artifact-marker" aria-label="artifacts">📁</span>
               </span>
             </span>
@@ -500,6 +650,19 @@ onBeforeUnmount(() => {
             </ul>
           </dd>
         </template>
+        <template v-if="taskPopover.task.schedules?.length">
+          <dt>Schedules</dt>
+          <dd>
+            <ul class="task-popover-schedules">
+              <li v-for="(schedule, index) in taskPopover.task.schedules" :key="`${taskPopover.task.label}-schedule-${index}`" class="task-popover-schedule">
+                <strong class="task-popover-schedule-cron">{{ schedule.cron }}</strong>
+                <span class="task-popover-schedule-meta">branch {{ schedule.branch }}</span>
+                <span class="task-popover-schedule-meta" :title="scheduleNextRunTitle(schedule)">next {{ scheduleNextRunText(schedule) }}</span>
+                <span class="task-popover-schedule-meta">{{ scheduleTimeUntilText(schedule) }}</span>
+              </li>
+            </ul>
+          </dd>
+        </template>
         <dt>Worktree Disabled</dt>
         <dd>{{ taskPopoverBool(taskPopover.task.worktree?.disabled) }}</dd>
         <template v-if="taskPopover.task.artifacts?.length">
@@ -515,6 +678,24 @@ onBeforeUnmount(() => {
           <dd class="task-popover-path">{{ taskPopover.task.taskFilePath }}</dd>
         </template>
       </dl>
+    </section>
+
+    <section
+      v-if="runPopover"
+      id="run-popover-tooltip"
+      ref="runPopoverElement"
+      class="run-popover branch-popover-floating"
+      role="tooltip"
+      :style="{
+        top: `${runPopoverPosition.top}px`,
+        left: `${runPopoverPosition.left}px`,
+      }"
+    >
+      <div class="run-popover-head">
+        <span class="branch-popover-label">Executed By</span>
+        <strong class="run-popover-owner">{{ runOwner(runPopover.run) }}</strong>
+      </div>
+      <span class="run-popover-time">{{ formatDateTime(runPopover.run.startTime) }}</span>
     </section>
   </Teleport>
 </template>
@@ -663,7 +844,8 @@ onBeforeUnmount(() => {
 }
 
 .row-status,
-.artifact-marker {
+.artifact-marker,
+.schedule-marker {
   flex: none;
 }
 
@@ -732,6 +914,19 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.run-popover {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  width: min(280px, calc(100vw - 24px));
+  border-radius: 12px;
+  color: var(--ink);
+  background: rgba(247, 250, 250, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 14px 30px rgba(33, 42, 57, 0.16);
+  pointer-events: none;
+}
+
 .branch-popover-label {
   font-size: 0.72rem;
   color: rgba(76, 86, 102, 0.92);
@@ -745,6 +940,22 @@ onBeforeUnmount(() => {
 .task-popover-head {
   display: grid;
   gap: 2px;
+}
+
+.run-popover-head {
+  display: grid;
+  gap: 2px;
+}
+
+.run-popover-owner {
+  font-size: 0.84rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.run-popover-time {
+  color: rgba(76, 86, 102, 0.92);
+  font-size: 0.76rem;
 }
 
 .task-popover-list {
@@ -774,6 +985,28 @@ onBeforeUnmount(() => {
 
 .task-popover-bullets li + li {
   margin-top: 2px;
+}
+
+.task-popover-schedules {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.task-popover-schedule {
+  display: grid;
+  gap: 2px;
+}
+
+.task-popover-schedule-cron {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.77rem;
+}
+
+.task-popover-schedule-meta {
+  color: rgba(76, 86, 102, 0.92);
+  font-size: 0.76rem;
 }
 
 .task-popover-path {
@@ -849,6 +1082,10 @@ onBeforeUnmount(() => {
 
   .task-popover {
     width: min(360px, calc(100vw - 24px));
+  }
+
+  .run-popover {
+    width: min(280px, calc(100vw - 24px));
   }
 
   .row-title {

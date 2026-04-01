@@ -4,20 +4,7 @@ server:
   publicURL: http://localhost:8080
 
 repository:
-  source: https://github.com/shibukawa/vsc-taskrunner-demo.git
-  cachePath: /var/lib/runtask/repos/demo-cache.git
-  auth:
-    type: envToken
-    provider: github
-    tokenEnv: GITHUB_FINE_GRAINED_TOKEN
-    repo: shibukawa/vsc-taskrunner-demo
-    allowedHosts:
-      - github.com
-      - api.github.com
-    # default: true
-    rejectBroadScope: true
-    # default: true
-    requireReadOnly: true
+  source: /workspace/demo
 
 auth:
   oidcIssuer: http://oidc.localhost:18888
@@ -86,6 +73,13 @@ tasks:
   no-checkout-demo:
     worktree:
       disabled: true
+  scheduled-log:
+    schedules:
+      - cron: "*/10 * * * *"
+        branch: main
+    artifacts:
+      - path: dist/scheduled-run.txt
+        format: file
   demo-parallel: {}
   demo-sequence: {}
   demo-mixed: {}
