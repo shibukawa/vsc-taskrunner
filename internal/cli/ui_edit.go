@@ -49,7 +49,7 @@ func (a *App) runUIEditTask(args []string) int {
 	if !ok {
 		return 1
 	}
-	taskOptions, err := uiInitTaskChoices(repoRoot)
+	taskOptions, _, err := uiInitTaskChoices(repoRoot)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
