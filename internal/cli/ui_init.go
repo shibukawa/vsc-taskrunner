@@ -119,7 +119,7 @@ func (p uiInitPrompter) collect(repoRoot string) (uiconfig.GeneratedConfig, erro
 	if err != nil {
 		return uiconfig.GeneratedConfig{}, err
 	}
-	taskOptions, err := uiInitTaskChoices(repoRoot)
+	taskOptions, taskDefaults, err := uiInitTaskChoices(repoRoot)
 	if err != nil {
 		return uiconfig.GeneratedConfig{}, err
 	}
@@ -165,7 +165,7 @@ func (p uiInitPrompter) collect(repoRoot string) (uiconfig.GeneratedConfig, erro
 		}
 	}
 
-	selectedTasks, err := promptTasks(p.reader, p.writer, p.inputFile, p.outputFile, taskOptions, taskOptions, false)
+	selectedTasks, err := promptTasks(p.reader, p.writer, p.inputFile, p.outputFile, taskOptions, taskDefaults, false)
 	if err != nil {
 		return uiconfig.GeneratedConfig{}, err
 	}
@@ -303,16 +303,17 @@ func uiInitBranchChoices(repoRoot string) ([]string, []string, string, error) {
 	return items, defaults, currentBranch, nil
 }
 
-func uiInitTaskChoices(repoRoot string) ([]string, error) {
+func uiInitTaskChoices(repoRoot string) ([]string, []string, error) {
 	options := tasks.ResolveLoadOptions("", repoRoot)
 	file, err := tasks.LoadFile(options)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	labels := make([]string, 0, len(file.Tasks))
+	defaults := make([]string, 0, len(file.Tasks))
 	seen := make(map[string]bool, len(file.Tasks))
 	for _, task := range file.Tasks {
 		label := task.EffectiveLabel()
@@ -321,9 +322,13 @@ func uiInitTaskChoices(repoRoot string) ([]string, error) {
 		}
 		seen[label] = true
 		labels = append(labels, label)
+		if !task.Hide {
+			defaults = append(defaults, label)
+		}
 	}
 	sort.Strings(labels)
-	return labels, nil
+	sort.Strings(defaults)
+	return labels, defaults, nil
 }
 
 func promptRequiredLine(reader *bufio.Reader, writer io.Writer, label string, defaultValue string) (string, error) {

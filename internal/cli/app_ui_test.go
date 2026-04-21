@@ -264,6 +264,82 @@ func TestUIInitBranchChoicesFiltersNestedBranches(t *testing.T) {
 	}
 }
 
+func TestUIInitTaskChoicesExcludeHiddenTasksFromDefaults(t *testing.T) {
+	t.Parallel()
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitForUITest(t, repo, "init", "-b", "main")
+	runGitForUITest(t, repo, "config", "user.email", "test@example.com")
+	runGitForUITest(t, repo, "config", "user.name", "tester")
+	if err := os.WriteFile(filepath.Join(repo, ".vscode", "tasks.json"), []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"shell","command":"echo build"},{"label":"deploy","type":"shell","command":"echo deploy","hide":true},{"label":"lint","type":"shell","command":"echo lint"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, defaults, err := uiInitTaskChoices(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(tasks, ","), "build,deploy,lint"; got != want {
+		t.Fatalf("tasks = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(defaults, ","), "build,lint"; got != want {
+		t.Fatalf("defaults = %q, want %q", got, want)
+	}
+}
+
+func TestAppRunUIInitDefaultsExcludeHiddenTasks(t *testing.T) {
+	t.Parallel()
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitForUITest(t, repo, "init", "-b", "main")
+	runGitForUITest(t, repo, "config", "user.email", "test@example.com")
+	runGitForUITest(t, repo, "config", "user.name", "tester")
+	if err := os.WriteFile(filepath.Join(repo, ".vscode", "tasks.json"), []byte(`{"version":"2.0.0","tasks":[{"label":"build","type":"process","command":"echo"},{"label":"deploy","type":"process","command":"echo","hide":true},{"label":"lint","type":"process","command":"echo"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitForUITest(t, repo, "add", ".vscode/tasks.json")
+	runGitForUITest(t, repo, "commit", "-m", "init")
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	stdin := bytes.NewBufferString(strings.Join([]string{
+		"",
+		"",
+		"main",
+		"",
+		"",
+		"",
+		"noauth",
+		"local",
+		"",
+		"",
+		"",
+	}, "\n"))
+	app := NewApp(stdin, &stdout, &stderr)
+	app.wd = func() (string, error) { return repo, nil }
+
+	if exitCode := app.Run([]string{"ui", "init"}); exitCode != 0 {
+		t.Fatalf("exitCode = %d stderr=%s", exitCode, stderr.String())
+	}
+
+	cfg, err := uiconfig.LoadConfig(filepath.Join(repo, "runtask-ui.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MatchTask("build") || !cfg.MatchTask("lint") {
+		t.Fatalf("expected visible tasks in config, got %+v", cfg.Tasks)
+	}
+	if cfg.MatchTask("deploy") {
+		t.Fatalf("expected hidden task to stay unselected by default, got %+v", cfg.Tasks)
+	}
+}
+
 func TestAppRunUIEditTaskAddWritesConfig(t *testing.T) {
 	t.Parallel()
 
